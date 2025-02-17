@@ -125,12 +125,12 @@ class Parameter:
 
 
 class Value(Parameter):
-    def __init__(self, value_type, is_output=False):
+    def __init__(self, value_type):
         self.value_type = value_type
-        super().__init__(is_output)
+        super().__init__(is_output=False)
 
     def __repr__(self) -> str:
-        return f"Value(dtype={self.value_type}, out={self.is_output})"
+        return f"Value(dtype={self.value_type})"
 
     def dtype(self):
         return self.value_type
