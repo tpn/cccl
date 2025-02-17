@@ -109,6 +109,23 @@ struct sum_op_t
   }
 };
 
+template <scan_mode Mode>
+struct sum_single_op_t
+{
+  template <class BlockScanT, class T>
+  __device__ void operator()(BlockScanT& scan, T& thread_data) const
+  {
+    if (Mode == scan_mode::exclusive)
+    {
+      scan.ExclusiveSum(thread_data, thread_data);
+    }
+    else
+    {
+      scan.InclusiveSum(thread_data, thread_data);
+    }
+  }
+};
+
 template <class T, scan_mode Mode>
 struct min_init_value_op_t
 {
@@ -371,6 +388,24 @@ C2H_TEST(
 
   block_scan<params::algorithm, params::items_per_thread, params::block_dim_x, params::block_dim_y, params::block_dim_z>(
     d_in, d_out, sum_op_t<params::mode>{});
+
+  c2h::host_vector<type> h_out = d_in;
+  host_scan(params::mode, h_out, std::plus<type>{});
+
+  REQUIRE_APPROX_EQ(h_out, d_out);
+}
+
+C2H_TEST("Block scan works with sum single", "[scan][block]", types, block_dim_x, block_dim_yz, algorithm, modes)
+{
+  using params = params_t<TestType>;
+  using type   = typename params::type;
+
+  c2h::device_vector<type> d_out(params::tile_size);
+  c2h::device_vector<type> d_in(params::tile_size);
+  c2h::gen(C2H_SEED(10), d_in);
+
+  block_scan<params::algorithm, params::block_dim_x, params::block_dim_y, params::block_dim_z>(
+    d_in, d_out, sum_single_op_t<params::mode>{});
 
   c2h::host_vector<type> h_out = d_in;
   host_scan(params::mode, h_out, std::plus<type>{});
