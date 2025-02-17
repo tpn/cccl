@@ -142,6 +142,18 @@ class Value(Parameter):
         return f"{self.value_type}"
 
 
+class DependentValue(Parameter):
+    def __init__(self, value_type):
+        self.value_type = value_type
+        super().__init__(is_output=False)
+
+    def __repr__(self) -> str:
+        return f"DependentValue(dep={self.value_type})"
+
+    def specialize(self, template_arguments):
+        return Value(self.value_type.resolve(template_arguments))
+
+
 class Pointer(Parameter):
     def __init__(self, value_dtype, is_output=False):
         self.value_dtype = value_dtype
