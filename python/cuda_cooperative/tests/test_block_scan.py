@@ -42,7 +42,10 @@ def test_block_exclusive_sum(T, threads_in_block, items_per_thread):
         thread_data = cuda.local.array(shape=items_per_thread, dtype=dtype)
         for i in range(items_per_thread):
             thread_data[i] = input[tid * items_per_thread + i]
-        block_exclusive_sum(temp_storage, thread_data, thread_data)
+        if items_per_thread == 1:
+            thread_data[0] = block_exclusive_sum(temp_storage, thread_data[0])
+        else:
+            block_exclusive_sum(temp_storage, thread_data, thread_data)
         for i in range(items_per_thread):
             output[tid * items_per_thread + i] = thread_data[i]
 
@@ -156,9 +159,14 @@ def test_block_exclusive_sum_prefix(threads_in_block, items_per_thread):
                     else 0
                 )
 
-            block_exclusive_sum(
-                temp_storage, thread_input, thread_output, block_prefix_op
-            )
+            if items_per_thread == 1:
+                thread_output[0] = block_exclusive_sum(
+                    temp_storage, thread_input[0], block_prefix_op
+                )
+            else:
+                block_exclusive_sum(
+                    temp_storage, thread_input, thread_output, block_prefix_op
+                )
 
             for item in range(items_per_thread):
                 item_offset = tile_offset + cuda.threadIdx.x * items_per_thread + item
