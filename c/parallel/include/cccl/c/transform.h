@@ -28,7 +28,7 @@ typedef struct cccl_device_transform_build_result_t
   size_t cubin_size;
   CUlibrary library;
   CUkernel transform_kernel;
-  int loaded_bytes_per_iteration;
+  size_t loaded_bytes_per_iteration;
   void* runtime_policy;
 } cccl_device_transform_build_result_t;
 
