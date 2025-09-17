@@ -38,7 +38,7 @@
 struct op_wrapper;
 struct device_transform_policy;
 
-using OffsetT = long;
+using OffsetT = long long;
 static_assert(std::is_same_v<cub::detail::choose_signed_offset_t<OffsetT>, OffsetT>,
               "OffsetT must be signed int32 or int64");
 
