@@ -1,3 +1,4 @@
+import json
 import types
 
 from cuda.coop import _nvrtc, _types
@@ -5,20 +6,37 @@ from cuda.coop import _nvrtc, _types
 
 class _DummyNvrtc:
     __file__ = "dummy_nvrtc"
+    last_source = None
+    last_filename = None
+    last_options = ()
 
     class nvrtcResult:
         NVRTC_SUCCESS = 0
+        NVRTC_ERROR_NO_PCH_CREATE_ATTEMPTED = 13
+        NVRTC_ERROR_PCH_CREATE_HEAP_EXHAUSTED = 14
+        NVRTC_ERROR_PCH_CREATE = 15
+
+    @classmethod
+    def reset(cls):
+        cls.last_source = None
+        cls.last_filename = None
+        cls.last_options = ()
 
     @staticmethod
     def nvrtcVersion():
-        return (0, 12, 0)
+        return (0, 13, 1)
 
     @staticmethod
-    def nvrtcCreateProgram(*args, **kwargs):
+    def nvrtcCreateProgram(src, name, *args, **kwargs):
+        _DummyNvrtc.last_source = src.decode("utf-8")
+        _DummyNvrtc.last_filename = name.decode("utf-8")
         return (0, object())
 
     @staticmethod
-    def nvrtcCompileProgram(*args, **kwargs):
+    def nvrtcCompileProgram(prog, num_opts, opts):
+        _DummyNvrtc.last_options = tuple(
+            opt.decode("utf-8") if isinstance(opt, bytes) else opt for opt in opts
+        )
         return (0,)
 
     @staticmethod
@@ -48,6 +66,18 @@ class _DummyNvrtc:
     @staticmethod
     def nvrtcGetProgramLog(*args, **kwargs):
         return (0,)
+
+    @staticmethod
+    def nvrtcGetPCHCreateStatus(*args, **kwargs):
+        return (_DummyNvrtc.nvrtcResult.NVRTC_SUCCESS,)
+
+    @staticmethod
+    def nvrtcGetPCHHeapSize(*args, **kwargs):
+        return (0, 4096)
+
+    @staticmethod
+    def nvrtcGetPCHHeapSizeRequired(*args, **kwargs):
+        return (0, 8192)
 
 
 class _DummyDevice:
@@ -118,7 +148,9 @@ def _install_nvrtc_stub(monkeypatch):
     monkeypatch.setattr(_nvrtc, "nvrtc", _DummyNvrtc)
     _nvrtc.compile_impl.cache_clear()
     _nvrtc.reset_compile_counter()
+    _nvrtc.reset_compile_records()
     _nvrtc._set_compile_counter_enabled(True)
+    _DummyNvrtc.reset()
 
 
 def test_nvrtc_compile_counter_counts_cache_misses(monkeypatch):
@@ -168,10 +200,120 @@ def test_nvrtc_dump_sources(tmp_path, monkeypatch):
 
     _nvrtc.compile(cpp="x", cc=80, rdc=True, code="lto")
 
-    files = list(tmp_path.iterdir())
+    files = sorted(p for p in tmp_path.iterdir() if p.suffix == ".cu")
     assert len(files) == 1
     content = files[0].read_text(encoding="utf-8")
     assert content == "x"
+
+
+def test_nvrtc_trace_records(tmp_path, monkeypatch):
+    _install_nvrtc_stub(monkeypatch)
+    trace_path = tmp_path / "trace.jsonl"
+    monkeypatch.setenv("NUMBA_CCCL_COOP_NVRTC_TRACE_PATH", str(trace_path))
+
+    ticks = iter([1.0, 1.25])
+    monkeypatch.setattr(_nvrtc.time, "perf_counter", lambda: next(ticks))
+
+    _nvrtc.compile(cpp="trace", cc=80, rdc=True, code="lto")
+
+    lines = trace_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["elapsed_ms"] == 250.0
+    assert record["source_sha1"]
+    assert record["compiled_source_sha1"]
+    assert record["pch_mode"] == "off"
+
+
+def test_nvrtc_pch_canonical_rewrites_source(tmp_path, monkeypatch):
+    _install_nvrtc_stub(monkeypatch)
+    pch_dir = tmp_path / "pch"
+    monkeypatch.setenv("NUMBA_CCCL_COOP_NVRTC_PCH", "canonical")
+    monkeypatch.setenv("NUMBA_CCCL_COOP_NVRTC_PCH_DIR", str(pch_dir))
+    monkeypatch.setenv(
+        "NUMBA_CCCL_COOP_NVRTC_PCH_HEADERS", "cuda/std/cstdint;cub/cub.cuh"
+    )
+
+    source = (
+        "#include <cuda/std/cstdint>\n"
+        "#include <cub/block/block_reduce.cuh>\n"
+        "int value = 0;\n"
+    )
+    _nvrtc.compile(cpp=source, cc=80, rdc=True, code="lto")
+
+    assert _DummyNvrtc.last_source.startswith('#include "cccl_coop_pch_')
+    assert "#include <cub/block/block_reduce.cuh>" not in _DummyNvrtc.last_source
+    assert "-pch" in _DummyNvrtc.last_options
+    assert f"-pch-dir={pch_dir}" in _DummyNvrtc.last_options
+    assert f"--include-path={pch_dir}" in _DummyNvrtc.last_options
+
+    headers = list(pch_dir.glob("cccl_coop_pch_*.h"))
+    assert len(headers) == 1
+    header_text = headers[0].read_text(encoding="utf-8")
+    assert "#include <cuda/std/cstdint>" in header_text
+    assert "#include <cub/cub.cuh>" in header_text
+    assert "#pragma nv_hdrstop" in header_text
+
+    records = _nvrtc.get_compile_records()
+    assert len(records) == 1
+    assert records[0].pch_mode == "canonical"
+    assert records[0].pch_status == "0"
+
+
+def test_nvrtc_pch_prologue_rewrites_source(tmp_path, monkeypatch):
+    _install_nvrtc_stub(monkeypatch)
+    pch_dir = tmp_path / "pch"
+    header_path = tmp_path / "mamba_pch.h"
+    header_path.write_text(
+        "#include <cuda/std/cstdint>\n"
+        "#include <cub/block/block_scan.cuh>\n"
+        "struct storage_t {};\n"
+        "#pragma nv_hdrstop\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NUMBA_CCCL_COOP_NVRTC_PCH", "prologue")
+    monkeypatch.setenv("NUMBA_CCCL_COOP_NVRTC_PCH_DIR", str(pch_dir))
+    monkeypatch.setenv("NUMBA_CCCL_COOP_NVRTC_PCH_PROLOGUE_PATH", str(header_path))
+    monkeypatch.setenv(
+        "NUMBA_CCCL_COOP_NVRTC_EXTRA_DEFINES",
+        "CCCL_DISABLE_CUB_NVRTC_COMPATIBILITY_CHECK",
+    )
+
+    source = (
+        "#include <cuda/std/cstdint>\n"
+        "#include <cub/block/block_scan.cuh>\n"
+        "struct storage_t {};\n"
+        "using algorithm_t = int;\n"
+    )
+    _nvrtc.compile(cpp=source, cc=80, rdc=True, code="lto")
+
+    assert _DummyNvrtc.last_source.startswith('#include "mamba_pch.h"\n')
+    assert _DummyNvrtc.last_source.endswith("using algorithm_t = int;\n")
+    assert "-pch" in _DummyNvrtc.last_options
+    assert f"--include-path={tmp_path}" in _DummyNvrtc.last_options
+    assert "-DCCCL_DISABLE_CUB_NVRTC_COMPATIBILITY_CHECK" in _DummyNvrtc.last_options
+
+    records = _nvrtc.get_compile_records()
+    assert len(records) == 1
+    assert records[0].pch_mode == "prologue"
+
+
+def test_type_wrapper_uses_stable_unique_names(monkeypatch):
+    from mamba_selective_scan_fwd import float2_type
+
+    monkeypatch.setattr(
+        _types.cuda,
+        "compile",
+        lambda *args, **kwargs: (b"fake_ltoir", None),
+    )
+
+    wrapper = _types.numba_type_to_wrapper(float2_type, methods=float2_type.methods)
+
+    assert wrapper.cpp_name.startswith("cccl_storage_")
+    assert "struct __align__(4) storage_t" not in wrapper.code
+    assert 'extern "C" __device__ void construct' not in wrapper.code
+    assert 'extern "C" __device__ void assign' not in wrapper.code
+    assert all(lto.name.startswith(wrapper.cpp_name) for lto in wrapper.lto_irs)
 
 
 def test_gpu_dataclass_bundles_temp_storage(monkeypatch):

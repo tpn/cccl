@@ -23,7 +23,7 @@ from .._types import (
     TemplateParameter,
     TempStoragePointer,
     Value,
-    numba_type_to_cpp,
+    numba_type_requires_wrapper,
     numba_type_to_wrapper,
 )
 
@@ -172,7 +172,7 @@ class merge_sort_keys(BasePrimitive):
         parameters = [method]
 
         type_definitions = None
-        if methods is not None or numba_type_to_cpp(self.dtype) == "storage_t":
+        if methods is not None or numba_type_requires_wrapper(self.dtype):
             type_definitions = [numba_type_to_wrapper(self.dtype, methods=methods)]
 
         self.algorithm = Algorithm(

@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import hashlib
 import re
 import time
 from collections import OrderedDict
@@ -111,6 +112,29 @@ NUMBA_TYPES_TO_CPP = {
     types.float64: "double",
 }
 
+_DEFAULT_CPP_FALLBACK = object()
+
+
+def _type_wrapper_name_id(numba_type):
+    return hashlib.sha1(str(numba_type).encode("utf-8")).hexdigest()[:16]
+
+
+def storage_cpp_name_for_numba_type(numba_type):
+    return f"cccl_storage_{_type_wrapper_name_id(numba_type)}"
+
+
+def is_storage_cpp_type(cpp_type):
+    return isinstance(cpp_type, str) and cpp_type.startswith("cccl_storage_")
+
+
+def numba_type_requires_wrapper(numba_type):
+    vector_cpp = _cuda_vector_type_to_cpp(numba_type)
+    if vector_cpp is not None:
+        return False
+    if isinstance(numba_type, (types.Tuple, types.UniTuple)):
+        return any(numba_type_requires_wrapper(elem) for elem in numba_type)
+    return numba_type not in NUMBA_TYPES_TO_CPP
+
 
 def _cuda_vector_type_to_cpp(numba_type):
     user_facing_object = getattr(numba_type, "user_facing_object", None)
@@ -145,20 +169,25 @@ def _cuda_vector_type_to_cpp(numba_type):
     return f"{base_alias}{count}"
 
 
-def numba_type_to_cpp(numba_type, default="storage_t"):
+def numba_type_to_cpp(numba_type, default=_DEFAULT_CPP_FALLBACK):
     vector_cpp = _cuda_vector_type_to_cpp(numba_type)
     if vector_cpp is not None:
         return vector_cpp
 
+    custom_default = (
+        storage_cpp_name_for_numba_type(numba_type)
+        if default is _DEFAULT_CPP_FALLBACK
+        else default
+    )
     if isinstance(numba_type, (types.Tuple, types.UniTuple)):
         elem_cpp = []
         for elem in numba_type:
             cpp_type = numba_type_to_cpp(elem, default=None)
-            if cpp_type is None or cpp_type == "storage_t":
-                return default
+            if cpp_type is None or is_storage_cpp_type(cpp_type):
+                return custom_default
             elem_cpp.append(cpp_type)
         return f"::cuda::std::tuple<{', '.join(elem_cpp)}>"
-    return NUMBA_TYPES_TO_CPP.get(numba_type, default)
+    return NUMBA_TYPES_TO_CPP.get(numba_type, custom_default)
 
 
 def method_to_signature(numba_type, method):
@@ -174,6 +203,8 @@ def method_to_signature(numba_type, method):
 class TypeWrapper:
     def __init__(self, numba_type, methods):
         self.lto_irs = []
+        self.cpp_name = storage_cpp_name_for_numba_type(numba_type)
+        self.helper_names = {}
 
         if numba_type in NUMBA_TYPES_TO_CPP:
             self.code = ""
@@ -187,23 +218,30 @@ class TypeWrapper:
         buf = StringIO()
         w = buf.write
         if "construct" in methods:
-            construct_name = methods["construct"].__name__
+            construct_name = self._helper_name(
+                numba_type, "construct", methods["construct"]
+            )
+            self.helper_names["construct"] = construct_name
             w(f'extern "C" __device__ void {construct_name}(void *ptr);\n')
         if "assign" in methods:
-            assign_name = methods["assign"].__name__
+            assign_name = self._helper_name(numba_type, "assign", methods["assign"])
+            self.helper_names["assign"] = assign_name
             w(
                 f'extern "C" __device__ void {assign_name}'
                 "(void *dst, const void *src);\n"
             )
 
-        w(f"struct __align__({alignment}) storage_t\n")
+        w(f"struct __align__({alignment}) {self.cpp_name}\n")
         w("{\n")
         if "construct" in methods:
-            w("    __device__ storage_t() {\n")
+            w(f"    __device__ {self.cpp_name}() {{\n")
             w(f"        {construct_name}(data);\n")
             w("    }\n")
         if "assign" in methods:
-            w("    __device__ storage_t& operator=(const storage_t &rhs) {\n")
+            w(
+                "    __device__ "
+                f"{self.cpp_name}& operator=(const {self.cpp_name} &rhs) {{\n"
+            )
             w(f"        {assign_name}(data, rhs.data);\n")
             w("        return *this;\n")
             w("    }\n")
@@ -213,16 +251,31 @@ class TypeWrapper:
         self.code = buf.getvalue()
 
         for method in methods:
+            helper_name = self.helper_names[method]
             ltoir_blob, _ = cuda.compile(
                 methods[method],
                 sig=method_to_signature(numba_type, method),
                 output="ltoir",
+                abi_info={"abi_name": helper_name},
             )
             ltoir = LTOIR(
-                name=f"udt_{numba_type!s}_{method}",
+                name=helper_name,
                 data=ltoir_blob,
             )
             self.lto_irs.append(ltoir)
+
+    @staticmethod
+    def _helper_name(numba_type, method_name, method):
+        identity = "|".join(
+            [
+                storage_cpp_name_for_numba_type(numba_type),
+                method_name,
+                getattr(method, "__module__", ""),
+                getattr(method, "__qualname__", getattr(method, "__name__", "")),
+            ]
+        )
+        digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
+        return f"{storage_cpp_name_for_numba_type(numba_type)}_{method_name}_{digest}"
 
 
 def numba_type_to_wrapper(
@@ -443,13 +496,13 @@ class StatefulOperator:
 
     def forward_decl(self):
         arg_decls = ["char *state"]
-        if self.ret_cpp_type == "storage_t":
+        if is_storage_cpp_type(self.ret_cpp_type):
             ret_decl = "void"
             arg_decls.append("void*")
         else:
             ret_decl = self.ret_cpp_type
         for arg in self.arg_cpp_types:
-            arg_decls.append("const void*" if arg == "storage_t" else arg)
+            arg_decls.append("const void*" if is_storage_cpp_type(arg) else arg)
         return f'extern "C" __device__ {ret_decl} {self.mangled_name()}({", ".join(arg_decls)});'
 
     def cpp_decl(self, name):
@@ -464,7 +517,9 @@ class StatefulOperator:
         for aid, arg_type in enumerate(self.arg_cpp_types):
             arg_name = f"wp_{aid}"
             param_decls.append(f"const {arg_type}& {arg_name}")
-            param_refs.append("&" + arg_name if arg_type == "storage_t" else arg_name)
+            param_refs.append(
+                "&" + arg_name if is_storage_cpp_type(arg_type) else arg_name
+            )
 
         param_decls_csv = ", ".join(param_decls)
         param_refs_csv = ", ".join(param_refs)
@@ -473,7 +528,7 @@ class StatefulOperator:
         w = buf.write
         state_name = f"{name}_state"
         w(f"auto {name} = [{state_name}]({param_decls_csv}) {{\n")
-        if self.ret_cpp_type == "storage_t":
+        if is_storage_cpp_type(self.ret_cpp_type):
             w(f"    {self.ret_cpp_type} result;\n")
             w(f"    {self.mangled_name()}(\n")
             w(f"        {state_name}, &result, {param_refs_csv});\n")
@@ -503,13 +558,13 @@ class StatelessOperator:
 
     def forward_decl(self):
         arg_decls = []
-        if self.ret_cpp_type == "storage_t":
+        if is_storage_cpp_type(self.ret_cpp_type):
             ret_decl = "void"
             arg_decls.append("void*")
         else:
             ret_decl = self.ret_cpp_type
         for arg in self.arg_cpp_types:
-            arg_decls.append("const void*" if arg == "storage_t" else arg)
+            arg_decls.append("const void*" if is_storage_cpp_type(arg) else arg)
         mangled_name = self.mangled_name()
         arg_decls_csv = ", ".join(arg_decls)
         return f'extern "C" __device__ {ret_decl} {mangled_name}({arg_decls_csv});'
@@ -520,7 +575,9 @@ class StatelessOperator:
         for aid, arg_type in enumerate(self.arg_cpp_types):
             arg_name = f"wp_{aid}"
             param_decls.append(f"const {arg_type}& {arg_name}")
-            param_refs.append("&" + arg_name if arg_type == "storage_t" else arg_name)
+            param_refs.append(
+                "&" + arg_name if is_storage_cpp_type(arg_type) else arg_name
+            )
 
         buf = StringIO()
         w = buf.write
@@ -529,8 +586,8 @@ class StatelessOperator:
         mangled_name = self.mangled_name()
 
         w(f"auto {name} = []({param_decls_csv}) {{\n")
-        if self.ret_cpp_type == "storage_t":
-            w("    storage_t result;\n")
+        if is_storage_cpp_type(self.ret_cpp_type):
+            w(f"    {self.ret_cpp_type} result;\n")
             w(f"    {mangled_name}(&result, {param_refs_csv});\n")
             w("    return result;\n")
         else:
@@ -558,7 +615,9 @@ class DependentPythonOperator:
         ret_dtype = self.ret_dtype.resolve(template_arguments)
         ret_cpp_type = numba_type_to_cpp(ret_dtype)
         ret_numba_type = (
-            types.CPointer(ret_dtype) if ret_cpp_type == "storage_t" else ret_dtype
+            types.CPointer(ret_dtype)
+            if is_storage_cpp_type(ret_cpp_type)
+            else ret_dtype
         )
         arg_cpp_types = []
         arg_dtypes = []
@@ -569,7 +628,9 @@ class DependentPythonOperator:
             arg_cpp_types.append(arg_cpp_type)
             arg_dtypes.append(str(arg_dtype))
             arg_numba_types.append(
-                types.CPointer(arg_dtype) if arg_cpp_type == "storage_t" else arg_dtype
+                types.CPointer(arg_dtype)
+                if is_storage_cpp_type(arg_cpp_type)
+                else arg_dtype
             )
 
         if isinstance(op, StatefulFunction):
@@ -580,7 +641,7 @@ class DependentPythonOperator:
                 arg_mangled
             )
             # name = f"F{op.name}"
-            if ret_cpp_type == "storage_t":
+            if is_storage_cpp_type(ret_cpp_type):
                 binary_op_signature = signature(
                     types.void,
                     types.CPointer(op.dtype),
@@ -617,7 +678,7 @@ class DependentPythonOperator:
                 arg_mangled
             )
             # name = f'F{op.name}'
-            if ret_cpp_type == "storage_t":
+            if is_storage_cpp_type(ret_cpp_type):
                 binary_op_signature = signature(
                     types.void, *arg_numba_types, ret_numba_type
                 )
