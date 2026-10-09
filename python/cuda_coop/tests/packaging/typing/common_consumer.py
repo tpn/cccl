@@ -1,0 +1,394 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. ALL RIGHTS RESERVED.
+#
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+from __future__ import annotations
+
+from typing import Any, Generic, Literal, TypeVar
+
+import numpy as np
+from typing_extensions import assert_type
+
+from cuda import coop
+from cuda.coop._typing import CompilerIntegerLike
+
+_ItemT = TypeVar("_ItemT")
+
+
+class _ReadOnlyThreadData(Generic[_ItemT]):
+    """Provide a read-only payload for readable-input signature checks.
+
+    The consumers check static declarations only; no kernel is compiled
+    with this custom Python payload.
+    """
+
+    items_per_thread: int
+    dtype: object | None
+
+    def __init__(self, value: _ItemT) -> None:
+        self.items_per_thread = 1
+        self.dtype = type(value)
+        self._value = value
+
+    def __len__(self) -> int:
+        return self.items_per_thread
+
+    def __getitem__(self, index: int, /) -> _ItemT:
+        if index != 0:
+            raise IndexError(index)
+        return self._value
+
+
+def check_common_surface(
+    source: object,
+    destination: object,
+    compiler_integer_dtype: Any,
+) -> None:
+    """Exercise public declarations without importing package internals."""
+
+    block = coop.this_block()
+    warp = coop.this_warp()
+    logical_warp = warp.group_by(8)
+    mapped_warps = block.group_by(2)
+    values = coop.ThreadData(items_per_thread=2, dtype=np.int16, alignment=16)
+    read_only_values = _ReadOnlyThreadData(np.int16(1))
+    storage = coop.TempStorage(64, alignment=16, sharing="shared")
+
+    assert_type(block, coop.ThreadGroup[Literal["block"]])
+    assert_type(warp, coop.ThreadGroup[Literal["warp"]])
+    assert_type(
+        logical_warp,
+        coop.ThreadGroup[Literal["threads_within_warp"]],
+    )
+    generic_group: coop.ThreadGroup = block
+    generic_group.rank()
+    generic_group.count("warp")
+    assert_type(generic_group.rank_as(np.uint32), np.uint32)
+    assert_type(generic_group.count_as(int, "warp"), int)
+    block.rank()
+    block.count("warp")
+    assert_type(block.rank_as(np.uint16), np.uint16)
+    assert_type(block.rank_as(int), int)
+    assert_type(block.count_as(np.int64, "grid"), np.int64)
+    block.count_as(compiler_integer_dtype)
+    block.is_member()
+    assert_type(block.sync(), None)
+    assert_type(block.sync_aligned(), None)
+    assert_type(logical_warp.sync(), None)
+    mapped_warps.rank("warp")
+    mapped_warps.count("block")
+    mapped_warps.is_member()
+    coop.this_grid().rank()
+    assert_type(values, coop.ThreadDataLike[np.int16])
+    assert_type(storage, coop.TempStorageLike)
+    assert_type(
+        coop.load(
+            block,
+            source,
+            values,
+            algorithm="direct",
+            valid_items=15,
+            oob_default=np.int16(0),
+            offset=1,
+            temp_storage=storage,
+        ),
+        None,
+    )
+    assert_type(
+        coop.load(block, source, values, algorithm="warp_transpose_timesliced"),
+        None,
+    )
+    assert_type(
+        coop.store(
+            block,
+            destination,
+            values,
+            algorithm="direct",
+            valid_items=15,
+            offset=1,
+            temp_storage=storage,
+        ),
+        None,
+    )
+    assert_type(
+        coop.load(warp, source, values, algorithm="transpose"),
+        None,
+    )
+    assert_type(
+        coop.store(warp, destination, values, algorithm="vectorize"),
+        None,
+    )
+    assert_type(
+        coop.load(logical_warp, source, values, algorithm="transpose"),
+        None,
+    )
+    assert_type(
+        coop.store(logical_warp, destination, values, algorithm="striped"),
+        None,
+    )
+    assert_type(
+        coop.exchange(block, values, mode="blocked_to_striped"),
+        coop.ThreadDataLike[np.int16],
+    )
+    assert_type(
+        coop.exchange(logical_warp, values, mode="striped_to_blocked"),
+        coop.ThreadDataLike[np.int16],
+    )
+    assert_type(
+        coop.shuffle(block, values, mode="up", distance=1),
+        coop.ThreadDataLike[np.int16],
+    )
+    assert_type(
+        coop.exchange(block, read_only_values, mode="blocked_to_striped"),
+        coop.ThreadDataLike[np.int16],
+    )
+    assert_type(
+        coop.shuffle(block, read_only_values, mode="down"),
+        coop.ThreadDataLike[np.int16],
+    )
+    assert_type(coop.sum(block, np.int32(4)), np.int32)
+    assert_type(
+        coop.reduce(logical_warp, np.float32(4), binary_op="max"),
+        np.float32,
+    )
+    assert_type(coop.sum(warp, np.uint32(4)), np.uint32)
+    assert_type(coop.sum(warp, values), np.int16)
+    assert_type(coop.reduce(logical_warp, values, binary_op="max"), np.int16)
+    assert_type(coop.reduce(block, values, binary_op="min"), np.int16)
+    assert_type(
+        coop.sum(warp, np.int32(4), valid_items=np.int32(7)),
+        np.int32,
+    )
+    assert_type(
+        coop.sum(block, values, algorithm="raking"),
+        np.int16,
+    )
+    assert_type(coop.sum(block, values, temp_storage=storage), np.int16)
+    assert_type(
+        coop.reduce(block, np.int32(4), binary_op="max", temp_storage=storage),
+        np.int32,
+    )
+    assert_type(
+        coop.scan(
+            block,
+            np.int32(4),
+            mode="inclusive",
+            scan_op="max",
+            algorithm="raking_memoize",
+            temp_storage=storage,
+        ),
+        np.int32,
+    )
+    assert_type(
+        coop.exclusive_scan(
+            logical_warp,
+            np.float32(4),
+            scan_op="multiplies",
+            initial_value=1.0,
+        ),
+        np.float32,
+    )
+    assert_type(
+        coop.inclusive_scan(warp, np.int16(4), scan_op="min"),
+        np.int16,
+    )
+    assert_type(
+        coop.exclusive_sum(block, values, algorithm="warp_scans"),
+        coop.ThreadDataLike[np.int16],
+    )
+    assert_type(coop.inclusive_sum(warp, np.uint32(4)), np.uint32)
+
+
+def check_common_scan_seeds(integer_seed: int, floating_seed: float) -> None:
+    """Preserve item dtype with typed or Python-scalar Scan initial values."""
+
+    block = coop.this_block()
+    warp = coop.this_warp()
+    values = coop.ThreadData(items_per_thread=2, dtype=np.int16)
+    assert_type(
+        coop.exclusive_scan(block, np.int32(4), initial_value=np.int32(0)),
+        np.int32,
+    )
+    assert_type(
+        coop.scan(block, values, mode="exclusive", initial_value=np.int16(0)),
+        coop.ThreadDataLike[np.int16],
+    )
+    assert_type(
+        coop.exclusive_scan(warp, np.float64(4), initial_value=np.float64(0)),
+        np.float64,
+    )
+    assert_type(
+        coop.scan(warp, np.float32(4), mode="exclusive", initial_value=0.0),
+        np.float32,
+    )
+    assert_type(
+        coop.exclusive_scan(block, values, initial_value=integer_seed),
+        coop.ThreadDataLike[np.int16],
+    )
+    assert_type(
+        coop.exclusive_scan(warp, np.float32(4), initial_value=floating_seed),
+        np.float32,
+    )
+
+
+def check_merge_sort_surface() -> None:
+    """Check readable inputs and preservation of both result dtypes."""
+
+    keys = coop.ThreadData(items_per_thread=3, dtype=np.int32)
+    values = coop.ThreadData(items_per_thread=3, dtype=np.float64)
+    read_only_keys = _ReadOnlyThreadData(np.int32(1))
+    read_only_values = _ReadOnlyThreadData(np.float64(1.0))
+    assert_type(
+        coop.merge_sort_keys(coop.this_block(), keys),
+        coop.ThreadDataLike[np.int32],
+    )
+    assert_type(
+        coop.merge_sort_pairs(coop.this_warp(), keys, values),
+        tuple[coop.ThreadDataLike[np.int32], coop.ThreadDataLike[np.float64]],
+    )
+    assert_type(
+        coop.merge_sort_keys(
+            coop.this_warp().group_by(8), keys, valid_items=23, oob_default=1000
+        ),
+        coop.ThreadDataLike[np.int32],
+    )
+    assert_type(
+        coop.merge_sort_keys(coop.this_block(), read_only_keys),
+        coop.ThreadDataLike[np.int32],
+    )
+    assert_type(
+        coop.merge_sort_pairs(
+            coop.this_warp(), read_only_keys, read_only_values
+        ),
+        tuple[coop.ThreadDataLike[np.int32], coop.ThreadDataLike[np.float64]],
+    )
+
+
+def check_radix_surface() -> None:
+    """Check sort key/value dtypes and fixed int32 ranks in the common API."""
+
+    block = coop.this_block()
+    keys = coop.ThreadData(items_per_thread=3, dtype=np.int32)
+    values = coop.ThreadData(items_per_thread=3, dtype=np.float64)
+    assert_type(
+        coop.radix_sort_keys(block, keys), coop.ThreadDataLike[np.int32]
+    )
+    assert_type(
+        coop.radix_rank_keys(block, keys, radix_bits=4),
+        coop.ThreadDataLike[np.int32],
+    )
+    assert_type(
+        coop.radix_sort_pairs(block, keys, values),
+        tuple[coop.ThreadDataLike[np.int32], coop.ThreadDataLike[np.float64]],
+    )
+
+
+def check_topk_surface() -> None:
+    """Check count inputs and separate key/value result dtypes for TopK."""
+
+    block = coop.this_block()
+    keys = coop.ThreadData(items_per_thread=3, dtype=np.int16)
+    values = coop.ThreadData(items_per_thread=3, dtype=np.float64)
+    assert_type(
+        coop.topk_min_keys(block, keys, k=7), coop.ThreadDataLike[np.int16]
+    )
+    assert_type(
+        coop.topk_max_keys(block, keys, k=np.int64(7), valid_items=31),
+        coop.ThreadDataLike[np.int16],
+    )
+    assert_type(
+        coop.topk_min_pairs(block, keys, values, k=7),
+        tuple[coop.ThreadDataLike[np.int16], coop.ThreadDataLike[np.float64]],
+    )
+    assert_type(
+        coop.topk_max_pairs(
+            block, keys, values, k=7, temp_storage=coop.TempStorage()
+        ),
+        tuple[coop.ThreadDataLike[np.int16], coop.ThreadDataLike[np.float64]],
+    )
+
+
+def check_neighbor_results() -> None:
+    """Check difference dtypes and single or paired int32 flag results."""
+
+    block = coop.this_block()
+    values = coop.ThreadData(items_per_thread=3, dtype=np.float64)
+    assert_type(
+        coop.adjacent_difference(block, values), coop.ThreadDataLike[np.float64]
+    )
+    assert_type(
+        coop.discontinuity(block, values), coop.ThreadDataLike[np.int32]
+    )
+    assert_type(
+        coop.discontinuity(block, values, mode="heads_and_tails"),
+        tuple[coop.ThreadDataLike[np.int32], coop.ThreadDataLike[np.int32]],
+    )
+
+
+def check_histogram_surface() -> None:
+    """Check that counter selection determines the histogram result type."""
+
+    block = coop.this_block()
+    samples = coop.ThreadData(items_per_thread=3, dtype=np.uint8)
+    assert_type(
+        coop.histogram(block, samples, bins=33), coop.ThreadDataLike[np.int32]
+    )
+    assert_type(
+        coop.histogram(
+            block,
+            samples,
+            bins=65,
+            bins_per_thread=2,
+            counter_dtype=np.uint64,
+            algorithm="sort",
+        ),
+        coop.ThreadDataLike[np.uint64],
+    )
+    assert_type(
+        coop.histogram(block, samples, bins=33, counter_dtype=int),
+        coop.ThreadDataLike[np.int32],
+    )
+
+
+def check_run_length_surface(destination: object) -> None:
+    """Check read-only run inputs and the two common-API result forms.
+
+    A window returns a payload with the run-value dtype. Bulk decoding writes
+    the destination and returns a uint32 total, even with uint64 run lengths.
+    """
+
+    block = coop.this_block()
+    values = _ReadOnlyThreadData(np.float32(7))
+    lengths = _ReadOnlyThreadData(np.uint64(3))
+    assert_type(
+        coop.run_length_decode(
+            block, values, lengths, decoded_items_per_thread=4
+        ),
+        coop.ThreadDataLike[np.float32],
+    )
+    assert_type(
+        coop.run_length_decode_into(
+            block,
+            values,
+            lengths,
+            destination,
+            decoded_items_per_thread=4,
+            destination_offset=np.int64(3),
+            temp_storage=coop.TempStorage(),
+        ),
+        np.uint32 | CompilerIntegerLike,
+    )
+
+
+def check_batched_reduction_typing() -> None:
+    """Check that Batched Reduction keeps the payload dtype.
+
+    The compiler computes the result extent, ceil(batches / warp_width), while
+    planning; the static annotation records only the item type.
+    """
+
+    warp = coop.this_warp()
+    values = coop.ThreadData(items_per_thread=3, dtype=np.float32)
+    assert_type(
+        coop.reduce_batched(warp, values), coop.ThreadDataLike[np.float32]
+    )
