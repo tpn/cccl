@@ -107,10 +107,10 @@ def kernel_compile_target(
 
     The whole-function planner enters this once per compiler attempt with
     the kernel's resolved target. Group helpers, providers, and Python
-    callbacks created inside then follow the kernel's ``chip`` instead of the
-    current device. ``None`` selects the current device. Exiting restores the
-    previous target, so a nested kernel compilation does not leak its target to
-    its caller.
+    callbacks created inside then follow the kernel's ``chip`` and
+    ``lineinfo`` options instead of the current device. ``None`` selects the
+    current device. Exiting restores the previous target, so a nested kernel
+    compilation does not leak its target to its caller.
     """
 
     token = _KERNEL_COMPILE_TARGET.set(target)
@@ -335,7 +335,8 @@ def _current_compile_target() -> nvrtc.CompileTarget:
 
     During a kernel compilation this is the kernel's own target, set by
     ``kernel_compile_target``. Outside one, such as when a provider is
-    specialized directly, fall back to the current device.
+    specialized directly, fall back to the current device without line
+    information.
     """
 
     target = _KERNEL_COMPILE_TARGET.get()
@@ -3800,7 +3801,8 @@ class RawCAbiInvocable:
         One transform per parameter. Arrays become opaque pointers; scalar
         operands retain their value type.
     target : nvrtc.CompileTarget
-        Device target of the kernel that calls this code.
+        Device target and line-information option of the kernel that calls
+        this code.
     compile_context : nvrtc.CompileContext
         Resolved header and toolkit context for compiling this source.
     storage_abi : StorageABI
