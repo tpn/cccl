@@ -1,0 +1,44 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. ALL RIGHTS RESERVED.
+#
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+"""Compile cooperative kernels through Numba typing instead of the planner.
+
+Setting ``CUDA_COOP_NUMBA_MLIR_PIPELINE=typed`` before the backend activates
+selects this pipeline in place of ``CoopWholeFunctionPlanner``. No planner is
+registered, and the pipeline has four stages, all on Numba-CUDA-MLIR's own
+extension points:
+
+1. typing templates on cooperative Numba types (``_types``, ``_templates``);
+2. one after-inference storage pass per kernel (``_storage_pass``), whose
+   decisions are plain data (``_plan``);
+3. lowering of each typed call to a provider call (``_lower``);
+4. link items backed by the storage pass's one compile (``_link``).
+
+Nothing cooperative runs before typing. Every Numba-CUDA-MLIR interface that
+is not public is reached through ``_bridges``. The supported surface is
+``this_block()``, ``ThreadData``, and ``load`` and ``store`` on a block
+group; any other cooperative call is a typing error, never a fallback.
+"""
+
+from __future__ import annotations
+
+_activated = False
+
+
+def _activate() -> None:
+    """Register the pipeline's typing, rewrite and lowering hooks once.
+
+    The backend's activation calls this under its activation lock, in place
+    of registering the planner.
+    """
+
+    global _activated
+    if _activated:
+        return
+    from . import _bridges, _storage_pass, _templates
+
+    _templates.register()
+    _storage_pass.register()
+    _bridges.refresh_registries()
+    _activated = True
