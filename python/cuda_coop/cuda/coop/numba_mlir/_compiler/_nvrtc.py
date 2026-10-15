@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any, TypeAlias, cast
 
 from cuda.coop._core._source_dump import dump_source
-from cuda.coop._headers import resolve_include_paths
+from cuda.coop._headers import CoopIncludePaths, resolve_include_paths
 from cuda.coop._headers._identity import include_dirs_identity
 from cuda.coop._headers._toolkit import (
     preload_toolkit_compiler_libraries,
@@ -59,6 +59,8 @@ _REQUIRED_HEADERS = (
     "cuda/std/functional",
     "cuda/std/type_traits",
 )
+
+_COMPILE_CONTEXTS: dict[tuple[str, ...], CompileContext] = {}
 
 
 @dataclass(frozen=True)
@@ -533,11 +535,17 @@ def resolve_compile_context() -> CompileContext:
 
     Hash the resolved header roots and their contents into the returned
     context. The context is used both for artifact cache keys and provider
-    symbol qualification. Resolution is lazy at its callers; this function
-    itself is not memoized and may load process-wide compiler libraries.
-    Algorithms retain their resolved context, so changing
-    ``CUDA_COOP_CCCL_ROOT`` affects subsequent resolutions, not contexts
-    already held by providers or supplied explicitly to ``compile``.
+    symbol qualification. Resolution is lazy at its callers and may load
+    process-wide compiler libraries. Algorithms retain their resolved
+    context, so changing ``CUDA_COOP_CCCL_ROOT`` affects subsequent
+    resolutions, not contexts already held by providers or supplied
+    explicitly to ``compile``.
+
+    Header roots are selected on every call, but the context for a given
+    ordered set of roots is built once per process: hashing header contents
+    dominates the cost of resolution. Header edits made while the process is
+    running are therefore not observed; call
+    ``clear_compile_context_cache`` to hash the headers again.
 
     Returns
     -------
@@ -552,6 +560,26 @@ def resolve_compile_context() -> CompileContext:
         required_headers=_REQUIRED_HEADERS,
     )
     include_dirs = tuple(str(path) for path in include_paths.as_tuple())
+    context = _COMPILE_CONTEXTS.get(include_dirs)
+    if context is None:
+        context = _COMPILE_CONTEXTS.setdefault(
+            include_dirs,
+            _resolve_compile_context_uncached(include_paths, include_dirs),
+        )
+    return context
+
+
+def clear_compile_context_cache() -> None:
+    """Forget resolved contexts so the next resolution hashes headers again."""
+
+    _COMPILE_CONTEXTS.clear()
+
+
+def _resolve_compile_context_uncached(
+    include_paths: CoopIncludePaths, include_dirs: tuple[str, ...]
+) -> CompileContext:
+    """Preload the toolkit for selected headers and identify their contents."""
+
     libraries = preload_toolkit_compiler_libraries(include_paths.cuda)
     nvrtc = _load_nvrtc()
     loaded_nvrtc_version = _nvrtc_version(nvrtc)
