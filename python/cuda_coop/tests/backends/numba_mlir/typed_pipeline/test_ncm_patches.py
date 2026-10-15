@@ -49,7 +49,9 @@ print("changed", changed)
 PATCHED = [
     "BuildTupleConstraint.__call__",
     "BuildTupleConstraint.refine",
+    "CallConstraint.refine",
     "LocalArrayTemplate.generic",
+    "Propagate.__call__",
     "StaticGetItemConstraint.__call__",
     "StaticGetItemConstraint.refine",
 ]
@@ -217,3 +219,30 @@ def test_a_plain_kernel_projecting_tuples_is_unchanged():
     output = np.zeros(32, np.float32)
     projected[1, 32](source, output, np.float32(2))
     np.testing.assert_array_equal(output, 9)
+
+
+# Phi of two ThreadData constructors (U-H1-3) --------------------------------
+
+
+@requires_typed_pipeline
+def test_a_plain_kernel_joining_arrays_and_scalars_is_unchanged():
+    from numba_cuda_mlir import cuda, types
+
+    @cuda.jit
+    def joined(output, first):
+        a = cuda.local.array(4, types.float32)
+        b = cuda.local.array(4, types.float32)
+        if first[0]:
+            values = a
+            scale = 2
+        else:
+            values = b
+            scale = 0.5
+        for i in range(4):
+            values[i] = i * scale
+        output[cuda.threadIdx.x] = values[3]
+
+    output = np.zeros(32, np.float32)
+    for first, expected in ((1, 6), (0, 1.5)):
+        joined[1, 32](output, np.array([first], np.int32))
+        np.testing.assert_array_equal(output, expected)

@@ -373,14 +373,7 @@ CASES = {
         (F32, F32, I32),
         error=r"cannot share a variable with a plain array",
     ),
-    "c3": Case(
-        c3,
-        (F32, F32, I32),
-        error=(
-            r"Cannot infer the type of variable 'b'.*imprecise type: "
-            r"coop\.ThreadData\(undefined, items=4"
-        ),
-    ),
+    "c3": Case(c3, (F32, F32, I32), ("b", F32_PRODUCER)),
     "h_after": Case(h_after, (F32, F32), ("td", F32_PRODUCER)),
     "h_before": Case(h_before, (F32, F32), ("td", F32_PRODUCER)),
     "h_fill": Case(

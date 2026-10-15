@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import operator
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -247,7 +248,83 @@ TUPLE_REFINEMENT = Patch(
     build=_tuple_refinement,
 )
 
-PATCHES = (LOCAL_ARRAY_SHAPE, TUPLE_REFINEMENT)
+# Phi of two ThreadData constructors (U-H1-3) --------------------------------
+
+
+class _FanOut:
+    """Every assignment that feeds one variable, refined together."""
+
+    def __init__(self, members: list) -> None:
+        self.members = members
+
+    def refine(self, typeinfer_, target_type) -> None:
+        for member in list(self.members):
+            member.refine(typeinfer_, target_type)
+
+
+def _join_refinement() -> tuple[tuple[type, str, Any], ...]:
+    """Refine every input of a phi, and let a constructor's refine pass.
+
+    Numba-CUDA-MLIR keeps one refine hook per variable, so when a phi joins
+    two ``ThreadData`` constructors, refining the join refines only the last
+    input typed. And a call whose result is refined raises "no type
+    refinement implemented" unless it is a getitem; propagation drops the
+    error, but it stops the refinement of the remaining inputs. With this
+    patch every assignment feeding a ``ThreadData`` variable is refined, and
+    refining a ``ThreadData`` call's result does nothing: typing adopts the
+    refined type for the call's signature on its next round.
+
+    Scope: cooperative types only. Inputs are kept only for a variable whose
+    type holds a ``ThreadDataType``, and only a refinement to such a type
+    passes a call.
+    """
+
+    propagate = typeinfer.Propagate.__call__
+    call_refine = typeinfer.CallConstraint.refine
+
+    def propagate_call(self, typeinfer_):
+        existing = typeinfer_.refine_map.get(self.dst)
+        propagate(self, typeinfer_)
+        target = typeinfer_.typevars[self.dst]
+        if (
+            existing is None
+            or existing is self
+            or not target.defined
+            or not holds_thread_data(target.getone())
+        ):
+            return
+        if isinstance(existing, _FanOut):
+            if self not in existing.members:
+                existing.members.append(self)
+            typeinfer_.refine_map[self.dst] = existing
+        elif isinstance(existing, typeinfer.Propagate):
+            typeinfer_.refine_map[self.dst] = _FanOut([existing, self])
+
+    def call_constraint_refine(self, typeinfer_, updated_type):
+        if self.func != operator.getitem and holds_thread_data(updated_type):
+            return
+        call_refine(self, typeinfer_, updated_type)
+
+    return (
+        (typeinfer.Propagate, "__call__", propagate_call),
+        (typeinfer.CallConstraint, "refine", call_constraint_refine),
+    )
+
+
+JOIN_REFINEMENT = Patch(
+    name="phi refinement",
+    ask=(
+        "U-H1-3 (refine every phi input; a constructor's refine hook does "
+        "not raise)"
+    ),
+    pins=(
+        Pin(typeinfer.Propagate, "__call__", "f25d7d19db3d8210"),
+        Pin(typeinfer.CallConstraint, "refine", "4b828831aeb90ba5"),
+    ),
+    build=_join_refinement,
+)
+
+PATCHES = (LOCAL_ARRAY_SHAPE, TUPLE_REFINEMENT, JOIN_REFINEMENT)
 
 _ABSENT = object()
 _replaced: list[tuple[type, str, Any]] = []
@@ -273,6 +350,7 @@ def replaced() -> tuple[tuple[type, str], ...]:
 
 
 __all__ = [
+    "JOIN_REFINEMENT",
     "LOCAL_ARRAY_SHAPE",
     "NCM_VERSION",
     "PATCHES",

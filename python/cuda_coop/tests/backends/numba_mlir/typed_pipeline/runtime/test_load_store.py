@@ -49,6 +49,31 @@ def test_k1_load_store_inferred(coop):
     np.testing.assert_array_equal(d_out.copy_to_host(), source)
 
 
+@pytest.mark.parametrize("algorithm", ["direct", "transpose"])
+def test_two_constructors_joined_by_a_branch(algorithm):
+    coop = coop_common
+
+    @cuda.jit
+    def joined(source, output, first):
+        block = coop.this_block()
+        a = coop.ThreadData(ITEMS)
+        b = coop.ThreadData(ITEMS)
+        if first[0]:
+            items = a
+        else:
+            items = b
+        coop.load(block, source, items, algorithm=algorithm)
+        for i in range(ITEMS):
+            items[i] = items[i] + first[0]
+        coop.store(block, output, items, algorithm=algorithm)
+
+    source = _source(np.int32)
+    for first in (0, 1):
+        output = np.zeros_like(source)
+        joined[1, THREADS](source, output, np.array([first], np.int32))
+        np.testing.assert_array_equal(output, source + first)
+
+
 @pytest.mark.parametrize("algorithm", ALGORITHMS)
 def test_round_trip(algorithm):
     coop = coop_common

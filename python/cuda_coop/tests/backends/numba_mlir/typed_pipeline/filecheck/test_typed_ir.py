@@ -11,7 +11,7 @@ pass inserted.
 
 from __future__ import annotations
 
-from numba_cuda_mlir import cuda
+from numba_cuda_mlir import cuda, types
 
 from cuda import coop
 from cuda.coop.numba_mlir._pipeline import testing
@@ -112,6 +112,40 @@ def test_a_load_through_a_tuple_alias_types_the_payload():
         CHECK:         alias = static_getitem(
         CHECK-SAME:      :: coop.ThreadData(float32, items=4, producer)
         CHECK:         _coop_store_wrapper_{{.*}}_value = items
+        CHECK-SAME:      :: coop.ThreadData(float32, items=4, producer)
+        """,
+        dump="typed_ir",
+        block=BLOCK,
+        chip=CHIP,
+    )
+
+
+def test_a_load_through_a_phi_types_both_constructors():
+    @cuda.jit
+    def joined(source, output, first):
+        block = coop.this_block()
+        a = coop.ThreadData(4)
+        b = coop.ThreadData(4)
+        if first[0]:
+            items = a
+        else:
+            items = b
+        coop.load(block, source, items)
+        coop.store(block, output, items)
+
+    testing.check(
+        joined,
+        types.void(*f32_in_out().args, types.int32[::1]),
+        """
+        CHECK-LABEL: typed-ir joined
+        CHECK:         a = call
+        CHECK-SAME:      :: coop.ThreadData(float32, items=4, producer)
+        CHECK:         b = call
+        CHECK-SAME:      :: coop.ThreadData(float32, items=4, producer)
+        CHECK:         [[JOIN:items[.][0-9]+]] = items
+        CHECK-SAME:      :: coop.ThreadData(float32, items=4, producer)
+        CHECK:         [[OTHER:items[.][0-9]+]] = b
+        CHECK-NEXT:    [[JOIN]] = [[OTHER]]
         CHECK-SAME:      :: coop.ThreadData(float32, items=4, producer)
         """,
         dump="typed_ir",
