@@ -4,7 +4,7 @@
 
 """Compile a kernel's providers once, and link them from memory.
 
-The storage pass compiles every provider specialization of a kernel in one
+Storage analysis compiles every provider specialization of a kernel in one
 NVRTC translation unit, a *bundle*. Bundles are memoized in process by what
 determines their bytes: the providers' private symbol digests, the target
 and compiler options, the header identity and the NVRTC version. A second

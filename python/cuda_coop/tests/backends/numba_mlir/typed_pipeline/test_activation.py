@@ -24,7 +24,7 @@ backend = "cuda.coop.numba_mlir"
 print("planners", planners)
 print("planner-imported", f"{backend}._compiler._planner" in sys.modules)
 print("pipeline-imported", f"{backend}._pipeline" in sys.modules)
-print("storage-pass", "CoopStoragePass" in rewrites)
+print("call-resolution", "CoopCallResolution" in rewrites)
 """
 
 
@@ -34,11 +34,11 @@ def test_default_registers_the_planner_only(pipeline):
     assert result.returncode == 0, result.stderr
     assert "planners ['CoopWholeFunctionPlanner']" in result.stdout
     assert "pipeline-imported False" in result.stdout
-    assert "storage-pass False" in result.stdout
+    assert "call-resolution False" in result.stdout
 
 
 @pytest.mark.parametrize("pipeline", ["typed", " Typed "])
-def test_typed_registers_the_storage_pass_and_never_imports_the_planner(
+def test_typed_registers_call_resolution_and_never_imports_the_planner(
     pipeline,
 ):
     result = run_python(_REPORT, pipeline)
@@ -46,7 +46,7 @@ def test_typed_registers_the_storage_pass_and_never_imports_the_planner(
     assert "planners []" in result.stdout
     assert "planner-imported False" in result.stdout
     assert "pipeline-imported True" in result.stdout
-    assert "storage-pass True" in result.stdout
+    assert "call-resolution True" in result.stdout
 
 
 def test_unknown_pipeline_is_an_error():

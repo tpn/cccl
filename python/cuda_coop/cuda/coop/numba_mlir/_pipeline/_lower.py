@@ -6,7 +6,7 @@
 
 Lowering takes no decisions. Everything it needs per call site (the
 provider symbol and ABI, the scratch operand, the barrier, the link items)
-was decided by the storage pass and stored in
+was decided by call resolution and stored in
 ``state.metadata["coop_plan"]``:
 
 * ``this_block()`` is a placeholder ``i8`` constant;

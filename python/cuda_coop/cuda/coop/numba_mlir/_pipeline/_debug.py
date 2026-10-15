@@ -4,7 +4,7 @@
 
 """Record what the typed pipeline did, for tests and for reading.
 
-The storage pass reports each kernel it plans to ``record``. Two consumers
+Call resolution reports each kernel it resolves to ``record``. Two consumers
 read those records:
 
 * ``capture()`` collects them while a test compiles a kernel, so the test
@@ -60,7 +60,7 @@ def format_typed_ir(name: str, func_ir: Any, typemap: dict) -> str:
 
 @dataclass(frozen=True)
 class KernelRecord:
-    """One kernel as the storage pass left it, after its last rewrite."""
+    """One kernel as call resolution left it, after its last rewrite."""
 
     plan: KernelPlan
     plan_text: str
@@ -103,7 +103,7 @@ def _print_requests() -> set[str]:
 def record(plan: KernelPlan, func_ir: Any, typemap: dict) -> None:
     """Report a kernel to active captures and to the print switch.
 
-    Call this once the pass has finished rewriting ``func_ir``.
+    Call this once call resolution has finished rewriting ``func_ir``.
     """
 
     requests = _print_requests()

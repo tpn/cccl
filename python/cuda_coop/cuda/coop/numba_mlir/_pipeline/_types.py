@@ -5,7 +5,7 @@
 """Numba types for cooperative groups and per-thread payloads.
 
 ``CoopGroupType`` is the type of ``this_block()``. It carries coop's own
-``ThreadGroup`` request and no launch dimensions; the storage pass reads the
+``ThreadGroup`` request and no launch dimensions; call resolution reads the
 block from the launch once typing is done.
 
 ``ThreadDataType`` is the type of ``ThreadData(items, dtype=...)``. It is a

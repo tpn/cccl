@@ -19,11 +19,37 @@ import textwrap
 
 import pytest
 
-TYPED = os.environ.get("CUDA_COOP_NUMBA_MLIR_PIPELINE", "") == "typed"
+TYPED = (
+    os.environ.get("CUDA_COOP_NUMBA_MLIR_PIPELINE", "").strip().lower()
+    == "typed"
+)
 
 requires_typed_pipeline = pytest.mark.skipif(
     not TYPED, reason="needs CUDA_COOP_NUMBA_MLIR_PIPELINE=typed"
 )
+
+# Compile-only tests pin the target and stand in for the launch's block.
+CHIP = "sm_120"
+BLOCK = (128, 1, 1)
+
+ALGORITHMS = (
+    "direct",
+    "striped",
+    "vectorize",
+    "transpose",
+    "warp_transpose",
+    "warp_transpose_timesliced",
+)
+STORAGE_FREE = ALGORITHMS[:3]
+TRANSPOSING = ALGORITHMS[3:]
+
+
+def f32_in_out():
+    """The signature ``(float32[::1], float32[::1])``."""
+
+    from numba_cuda_mlir import types
+
+    return types.void(types.float32[::1], types.float32[::1])
 
 
 def run_python(code: str, pipeline: str | None) -> subprocess.CompletedProcess:

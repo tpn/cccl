@@ -27,7 +27,7 @@ The guarded method call is a witness: its template returns a refined
 receiver, which Numba propagates to the caller's payload with the evidence
 strength of a producer (or, for ``store``, of a store destination). The
 private operation then types with a precise payload and builds coop's own
-request, a dims-free ``GroupPrimitiveCall`` that the storage pass completes
+request, a dims-free ``GroupPrimitiveCall`` that call resolution completes
 with the launch's block.
 """
 
@@ -312,7 +312,7 @@ class LoadStoreRequest:
     """A typed ``load`` or ``store``, before the launch is known.
 
     Requests are interned by ``key``, so identity is equality.
-    ``call`` is coop's ``GroupPrimitiveCall``; the storage pass completes
+    ``call`` is coop's ``GroupPrimitiveCall``; call resolution completes
     it with ``plan_group_primitive`` once it knows the block.
     """
 
@@ -462,7 +462,7 @@ def request_for(kind: str, args, kws) -> LoadStoreRequest:
 
     request = _request(kind, args, kws)
     if request is None:
-        raise AssertionError(f"coop.{kind} reached the storage pass untyped")
+        raise AssertionError(f"coop.{kind} reached call resolution untyped")
     return request
 
 

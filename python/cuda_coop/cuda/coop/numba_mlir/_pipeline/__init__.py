@@ -9,11 +9,14 @@ selects this pipeline in place of ``CoopWholeFunctionPlanner``. No planner is
 registered, and the pipeline has four stages, all on Numba-CUDA-MLIR's own
 extension points:
 
-1. typing templates on cooperative Numba types (``_types``, ``_templates``);
-2. one after-inference storage pass per kernel (``_storage_pass``), whose
-   decisions are plain data (``_plan``);
-3. lowering of each typed call to a provider call (``_lower``);
-4. link items backed by the storage pass's one compile (``_link``).
+1. typing templates on cooperative Numba types (``_types``, ``_templates``),
+   which give each cooperative call a request that knows nothing of the
+   launch;
+2. one after-inference call resolution per kernel (``_resolve``), which
+   turns every request into a concrete provider call and whose decisions
+   are plain data (``_plan``);
+3. lowering of each resolved call to a provider call (``_lower``);
+4. link items backed by the resolution's one compile (``_link``).
 
 Nothing cooperative runs before typing. Every Numba-CUDA-MLIR interface that
 is not public is reached through ``_bridges``. The supported surface is
@@ -36,11 +39,11 @@ def _activate() -> None:
     global _activated
     if _activated:
         return
-    from . import _bridges, _lower, _storage_pass, _templates, _types
+    from . import _bridges, _lower, _resolve, _templates, _types
 
     _types.register()
     _templates.register()
     _lower.register()
-    _storage_pass.register()
+    _resolve.register()
     _bridges.refresh_registries()
     _activated = True

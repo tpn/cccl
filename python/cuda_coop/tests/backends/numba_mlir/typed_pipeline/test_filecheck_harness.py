@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-"""The storage pass reports every kernel, and its dumps are FileCheck-able.
+"""Call resolution reports every kernel, and its dumps are FileCheck-able.
 
 These cases pin the dump formats on kernels without cooperative calls; the
 per-operation tests check the same dumps on real cooperative kernels.

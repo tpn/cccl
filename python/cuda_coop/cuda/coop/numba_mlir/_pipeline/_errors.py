@@ -6,7 +6,7 @@
 
 Every error is a Numba ``TypingError``, so it is reported with the kernel's
 source location like any other typing failure, whether it is raised by a
-typing template or by the storage pass after typing.
+typing template or by call resolution after typing.
 """
 
 from __future__ import annotations
