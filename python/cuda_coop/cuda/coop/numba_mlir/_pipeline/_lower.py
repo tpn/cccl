@@ -11,7 +11,8 @@ was decided by call resolution and stored in
 
 * ``this_block()`` is a placeholder ``i8`` constant;
 * ``ThreadData(...)`` is a ``memref.alloca`` of its type's extent, aligned as
-  the constructor's own ``alignment=`` asks;
+  the constructor's own ``alignment=`` asks, and its ``items_per_thread``
+  is that extent as a constant;
 * a ``load`` or ``store`` is a ``func.call`` to the provider, with the
   scratch pointer first when the provider takes one, then the memory and
   payload pointers, then the runtime controls converted to their ABI
@@ -67,6 +68,14 @@ def _lower_thread_data(builder, target, args, kwargs):
                 alignment=max(struct.calcsize("P"), alignment),
             )
     builder.store_var(target, value)
+
+
+def _lower_items_per_thread(context, builder, target, value):
+    extent = builder.get_numba_type(target.name)
+    builder.store_var(
+        target,
+        nb.arith.constant(builder.get_mlir_type(extent), extent.literal_value),
+    )
 
 
 def _call_entry(builder, target) -> Any:
@@ -165,6 +174,9 @@ def register() -> None:
             nb.lowering_registry.lower(obj)(_lower_this_block)
         elif short == "ThreadData":
             nb.lowering_registry.lower(obj, any_args)(_lower_thread_data)
+    nb.lowering_registry.lower_getattr(ThreadDataType, "items_per_thread")(
+        _lower_items_per_thread
+    )
     for op in OPERATIONS:
         nb.lowering_registry.lower(op, any_args)(_lower_operation)
     _registered = True

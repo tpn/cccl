@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import pytest
 from numba_cuda_mlir import cuda, types
+from numba_cuda_mlir.numba_cuda.core.errors import TypingError
 
+import cuda.coop.numba_mlir as qualified_coop
 from cuda import coop
 from cuda.coop.numba_mlir._pipeline import testing
 from cuda.coop.numba_mlir._pipeline._errors import TypedPipelineError
@@ -56,14 +58,81 @@ def test_a_group_other_than_the_block_is_refused():
         _compile(kernel)
 
 
-def test_a_plain_array_payload_has_no_typed_extent():
+def test_the_common_api_refuses_a_local_array_load_payload():
     def kernel(source, output):
         items = cuda.local.array(4, types.float32)
         coop.load(coop.this_block(), source, items)
+        output[0] = items[0]
+
+    with pytest.raises(
+        Exception,
+        match=r"cuda\.coop\.load requires output to be a fixed-size "
+        r"ThreadData payload in the common API; use cuda\.coop\.numba_mlir",
+    ):
+        _compile(kernel)
+
+
+def test_the_common_api_refuses_a_local_array_store_payload():
+    def kernel(source, output):
+        items = cuda.local.array(4, types.float32)
+        for i in range(4):
+            items[i] = source[i]
         coop.store(coop.this_block(), output, items)
 
-    with pytest.raises(Exception, match=r"has no typed extent"):
+    with pytest.raises(
+        Exception,
+        match=r"cuda\.coop\.store accepts only a scalar or fixed-size "
+        r"ThreadData value payload in the common API",
+    ):
         _compile(kernel)
+
+
+def test_a_qualified_array_payload_needs_a_local_array_constructor():
+    def kernel(source, output):
+        qualified_coop.store(qualified_coop.this_block(), output, source)
+
+    with pytest.raises(
+        TypedPipelineError,
+        match=r"cuda\.coop\.numba_mlir\.store requires a static "
+        r"items_per_thread extent before provider selection",
+    ):
+        _compile(kernel)
+
+
+def test_qualified_local_array_payloads_must_agree_on_the_extent():
+    def kernel(source, output, flag):
+        if flag[0]:
+            items = cuda.local.array(2, types.float32)
+        else:
+            items = cuda.local.array(4, types.float32)
+        qualified_coop.load(qualified_coop.this_block(), source, items)
+        output[0] = items[0]
+
+    signature = types.void(*f32_in_out().args, types.int32[::1])
+    with pytest.raises(
+        TypedPipelineError,
+        match=r"cuda\.coop\.numba_mlir loop-carried payloads have "
+        r"inconsistent items_per_thread extents",
+    ):
+        _compile(kernel, signature)
+
+
+def test_a_local_array_sized_by_a_kernel_argument_is_refused():
+    # Numba-CUDA-MLIR types cuda.local.array only with a constant shape and
+    # fails the call before coop sees it, so the message is its own. Making
+    # the argument literal needs a pass before typing, which would disable
+    # the disk cache for every kernel in the process.
+    def kernel(source, output, items_per_thread):
+        block = qualified_coop.this_block()
+        items = cuda.local.array(items_per_thread, types.float32)
+        qualified_coop.load(block, source, items)
+        qualified_coop.store(block, output, items)
+
+    signature = types.void(*f32_in_out().args, types.int64)
+    with pytest.raises(
+        TypingError, match=r"(?s)No implementation of function.*array\(int64"
+    ):
+        _compile(kernel, signature)
 
 
 def test_an_unknown_algorithm_lists_the_known_ones():

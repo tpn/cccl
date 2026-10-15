@@ -29,6 +29,14 @@ strength of a producer (or, for ``store``, of a store destination). The
 private operation then types with a precise payload and builds coop's own
 request, a dims-free ``GroupPrimitiveCall`` that call resolution completes
 with the launch's block.
+
+Each API has its own private operations, because their payload rules
+differ: a ``cuda.coop.numba_mlir`` call also accepts a ``cuda.local.array``
+payload, whose extent call resolution reads from the IR, and a
+``cuda.coop`` call refuses one with coop's common-API diagnostic.
+
+A ``ThreadData``'s ``items_per_thread`` attribute is its extent as an
+integer literal, the constant coop's planner substitutes for it.
 """
 
 from __future__ import annotations
@@ -291,6 +299,13 @@ def _witness_template(key: type) -> type:
     return Witness
 
 
+class _ThreadDataAttributes(nb.AttributeTemplate):
+    key = ThreadDataType
+
+    def resolve_items_per_thread(self, td):
+        return nb.types.IntegerLiteral(td.items)
+
+
 # load and store --------------------------------------------------------------
 
 
@@ -302,10 +317,27 @@ def _coop_store_op(*args, **kwargs):
     raise NotImplementedError("cuda.coop: kernel only")
 
 
+def _coop_qualified_load_op(*args, **kwargs):
+    raise NotImplementedError("cuda.coop: kernel only")
+
+
+def _coop_qualified_store_op(*args, **kwargs):
+    raise NotImplementedError("cuda.coop: kernel only")
+
+
 OPERATIONS: dict[Callable, str] = {
     _coop_load_op: "load",
     _coop_store_op: "store",
+    _coop_qualified_load_op: "load",
+    _coop_qualified_store_op: "store",
 }
+
+# The private operations of ``cuda.coop.numba_mlir``'s load and store.
+QUALIFIED_OPERATIONS = frozenset(
+    {_coop_qualified_load_op, _coop_qualified_store_op}
+)
+
+_QUALIFIED_PREFIX = "cuda.coop.numba_mlir."
 
 
 @dataclass(frozen=True, eq=False)
@@ -434,18 +466,30 @@ def _algorithm(kind: str, ty: Any) -> str | None:
         ) from None
 
 
-def _check_payload(kind: str, payload: Any) -> None:
-    name = _PAYLOAD[kind]
+_COMMON_ARRAY_PAYLOAD = {
+    "load": (
+        "cuda.coop.load requires output to be a fixed-size ThreadData "
+        "payload in the common API; use cuda.coop.numba_mlir for "
+        "backend-qualified local-array payload support"
+    ),
+    "store": (
+        "cuda.coop.store accepts only a scalar or fixed-size ThreadData "
+        "value payload in the common API; use cuda.coop.numba_mlir for "
+        "backend-qualified local-array payload support"
+    ),
+}
+
+
+def _check_payload(kind: str, payload: Any, qualified: bool) -> None:
     if isinstance(payload, ThreadDataType):
         return
     if isinstance(payload, nb.types.Array):
-        raise TypedPipelineError(
-            f"coop.{kind}: the {name} payload {payload} has no typed "
-            "extent. Use coop.ThreadData: a plain array's shape is not "
-            "part of its type."
-        )
+        if qualified:
+            return
+        raise TypedPipelineError(_COMMON_ARRAY_PAYLOAD[kind])
     raise TypedPipelineError(
-        f"coop.{kind}: {name} must be a coop.ThreadData, got {payload}"
+        f"coop.{kind}: {_PAYLOAD[kind]} must be a coop.ThreadData, got "
+        f"{payload}"
     )
 
 
@@ -461,7 +505,12 @@ def is_scalar_value(ty: Any) -> bool:
     return isinstance(nb.unliteral(ty), (nb.types.Number, nb.types.Boolean))
 
 
-def _request(kind: str, args, kws) -> LoadStoreRequest | None:
+_PENDING_EXTENT = object()
+
+
+def _request(
+    kind: str, args, kws, *, qualified: bool = False, extent: int | None = None
+) -> Any:
     """Validate a typed call and return its interned request.
 
     The request has no controls: whether a control is static or runtime
@@ -470,7 +519,9 @@ def _request(kind: str, args, kws) -> LoadStoreRequest | None:
     destination's dtype; site analysis checks the value against it.
 
     Return ``None`` while the payload's dtype is still undefined, so that a
-    later typing round retries with the refined payload.
+    later typing round retries with the refined payload. A qualified call
+    with a plain-array payload has no extent in its types; it returns
+    ``_PENDING_EXTENT`` until site analysis supplies ``extent``.
     """
 
     from ..._core.dtype_policy import validate_common_numeric_dtype_name
@@ -496,7 +547,7 @@ def _request(kind: str, args, kws) -> LoadStoreRequest | None:
     if kind == "store" and is_scalar_value(payload):
         dtype, items = memory.dtype, 1
     else:
-        _check_payload(kind, payload)
+        _check_payload(kind, payload, qualified)
         if not payload.dtype.is_precise():
             return None
         if payload.dtype != memory.dtype:
@@ -504,7 +555,8 @@ def _request(kind: str, args, kws) -> LoadStoreRequest | None:
                 f"coop.{kind}: payload dtype {payload.dtype} conflicts with "
                 f"{_MEMORY[kind]} dtype {memory.dtype}"
             )
-        dtype, items = payload.dtype, payload.items
+        dtype = payload.dtype
+        items = payload.items if isinstance(payload, ThreadDataType) else extent
     algorithm = _algorithm(kind, bound.get("algorithm"))
     if algorithm is None:
         return None
@@ -512,21 +564,29 @@ def _request(kind: str, args, kws) -> LoadStoreRequest | None:
         validate_common_numeric_dtype_name(str(dtype), operation=kind)
     except TypeError as exc:
         raise TypedPipelineError(str(exc)) from None
+    if items is None:
+        return _PENDING_EXTENT
     return _intern(kind, group, dtype, items, algorithm)
 
 
-def request_for(kind: str, args, kws) -> LoadStoreRequest:
-    """Return the request a typed call built, from its argument types."""
+def request_for(
+    kind: str, args, kws, *, qualified: bool = False, extent: int | None = None
+) -> LoadStoreRequest:
+    """Return the request a typed call built, from its argument types.
 
-    request = _request(kind, args, kws)
-    if request is None:
+    ``extent`` is the extent of a plain-array payload, which its type does
+    not carry.
+    """
+
+    request = _request(kind, args, kws, qualified=qualified, extent=extent)
+    if request is None or request is _PENDING_EXTENT:
         raise AssertionError(f"coop.{kind} reached call resolution untyped")
     return request
 
 
-def _operation(kind: str) -> Callable:
+def _operation(kind: str, qualified: bool) -> Callable:
     def generic(self, args, kws):
-        if _request(kind, args, kws) is None:
+        if _request(kind, args, kws, qualified=qualified) is None:
             return None
         return nb.signature(nb.types.none, *args, *kws.values())
 
@@ -579,7 +639,11 @@ def make_wrapper(
         p.name if p.kind is p.POSITIONAL_OR_KEYWORD else f"{p.name}={p.name}"
         for p in ordinary
     ]
-    op = _coop_load_op if operation == "load" else _coop_store_op
+    if qualified_name.startswith(_QUALIFIED_PREFIX):
+        load, store = _coop_qualified_load_op, _coop_qualified_store_op
+    else:
+        load, store = _coop_load_op, _coop_store_op
+    op = load if operation == "load" else store
     name = f"_coop_{operation}_wrapper"
     source = (
         f"def {name}({', '.join(header)}):\n"
@@ -646,8 +710,12 @@ def register() -> None:
             register_template(obj, _rejecting(qualified_name), name)
 
     for op, kind in OPERATIONS.items():
+        qualified = op in QUALIFIED_OPERATIONS
         register_template(
-            op, _operation(kind), f"private_{kind}", prefer_literal=True
+            op,
+            _operation(kind, qualified),
+            f"private_{'qualified_' if qualified else ''}{kind}",
+            prefer_literal=True,
         )
     for key in (
         ThreadDataType,
@@ -656,6 +724,7 @@ def register() -> None:
         nb.types.Boolean,
     ):
         nb.typing_registry.register_attr(_witness_template(key))
+    nb.typing_registry.register_attr(_ThreadDataAttributes)
     for method in ("refine_load", "refine_store"):
         nb.lowering_registry.lower(
             f"coop.thread_data.{method}", nb.types.VarArg(nb.types.Any)
@@ -669,6 +738,7 @@ def register() -> None:
 __all__ = [
     "CONTROLS",
     "OPERATIONS",
+    "QUALIFIED_OPERATIONS",
     "WRAPPER_SOURCE",
     "LoadStoreRequest",
     "constructor_alignment",

@@ -358,11 +358,15 @@ CASES = {
     "kw": Case(kw, (F32, F32), ("td", F32_PRODUCER)),
     "kw_positional": Case(kw_positional, (F32, F32), ("td", F32_PRODUCER)),
     # Which side of the join Numba types first depends on what the process
-    # has already compiled; a plain array first unifies to a plain array.
+    # has already compiled; a plain array first unifies to a plain array,
+    # which the common API's store refuses.
     "phi_plain": Case(
         phi_plain,
         (F32, F32, I32),
-        error=r"has no typed extent|cannot share a variable with a plain array",
+        error=(
+            r"cannot share a variable with a plain array"
+            r"|ThreadData value payload in the common API"
+        ),
     ),
     "phi_plain_ld": Case(
         phi_plain_ld,

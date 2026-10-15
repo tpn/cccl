@@ -13,6 +13,8 @@ change the IR. For each kernel it:
   functions (``targetoptions["device"]``), which have no launch;
 * checks that write-only payloads agree on their dtype, and that every read
   of a payload typed to its final dtype;
+* reads the extent of a ``cuda.coop.numba_mlir`` call's ``cuda.local.array``
+  payload from its constructor's shape, as coop's planner does;
 * binds each site's ``valid_items``, ``oob_default`` and ``offset`` as
   static or runtime by where the value comes from, as coop's planner does,
   and checks them and any scalar ``store`` value by coop's rules;
@@ -34,6 +36,7 @@ from ._errors import TypedPipelineError
 from ._templates import (
     CONTROLS,
     OPERATIONS,
+    QUALIFIED_OPERATIONS,
     LoadStoreRequest,
     is_scalar_value,
     is_wrapper_location,
@@ -175,7 +178,7 @@ class _Analysis:
     def __init__(self, func_ir, typemap, args):
         self.func_ir, self.typemap, self.args = func_ir, typemap, tuple(args)
 
-    def collect(self) -> list[tuple[Any, str, int | None]]:
+    def collect(self) -> list[tuple[Any, str, int | None, bool]]:
         found = []
         line = None
         for label in sorted(self.func_ir.blocks):
@@ -187,17 +190,22 @@ class _Analysis:
                     and isinstance(stmt.value, nb.ir.Expr)
                     and stmt.value.op == "call"
                 ):
-                    kind = OPERATIONS.get(_callee(self.typemap, stmt.value))
+                    callee = _callee(self.typemap, stmt.value)
+                    kind = OPERATIONS.get(callee)
                     if kind is not None:
-                        found.append((stmt, kind, line))
+                        found.append(
+                            (stmt, kind, line, callee in QUALIFIED_OPERATIONS)
+                        )
         return found
 
-    def site(self, stmt, kind, line) -> Site:
+    def site(self, stmt, kind, line, qualified) -> Site:
         expr = stmt.value
         request = request_for(
             kind,
             [self.typemap[a.name] for a in expr.args],
             {k: self.typemap[v.name] for k, v in expr.kws},
+            qualified=qualified,
+            extent=self._array_extent(stmt, kind) if qualified else None,
         )
         scalar = self._store_scalar(stmt, kind, request.dtype)
         request = with_controls(
@@ -359,6 +367,62 @@ class _Analysis:
             raise TypedPipelineError(str(exc)) from None
         return Scalar(value)
 
+    def _array_extent(self, stmt, kind: str) -> int | None:
+        """Return the extent of a plain-array payload, read from the IR.
+
+        As in coop's planner, the payload must come, through aliases, from
+        ``cuda.local.array`` calls with a constant integer shape, and they
+        must agree. Return ``None`` for a payload that is not a plain array.
+        """
+
+        var = stmt.value.args[2]
+        ty = self.typemap[var.name]
+        if not isinstance(ty, nb.types.Array) or isinstance(ty, ThreadDataType):
+            return None
+        extents, pending, seen = set(), [var], set()
+        while pending:
+            var = pending.pop()
+            if var.name in seen:
+                continue
+            seen.add(var.name)
+            for definition in self.func_ir._definitions.get(var.name, ()):
+                if isinstance(definition, nb.ir.Var):
+                    pending.append(definition)
+                elif isinstance(definition, nb.ir.Expr) and (
+                    definition.op == "cast"
+                ):
+                    pending.append(definition.value)
+                elif isinstance(definition, nb.ir.Expr) and (
+                    definition.op == "phi"
+                ):
+                    pending.extend(definition.incoming_values)
+                else:
+                    extents.add(self._local_array_extent(definition))
+        if None in extents or not extents:
+            raise TypedPipelineError(
+                f"cuda.coop.numba_mlir.{kind} requires a static "
+                "items_per_thread extent before provider selection"
+            )
+        if len(extents) > 1:
+            raise TypedPipelineError(
+                "cuda.coop.numba_mlir loop-carried payloads have "
+                "inconsistent items_per_thread extents"
+            )
+        return extents.pop()
+
+    def _local_array_extent(self, definition: Any) -> int | None:
+        if not (
+            isinstance(definition, nb.ir.Expr)
+            and definition.op == "call"
+            and _callee(self.typemap, definition) is nb.cuda.local.array
+        ):
+            return None
+        shape = _shape(definition)
+        ty = None if shape is None else self.typemap.get(shape.name)
+        if isinstance(ty, nb.types.IntegerLiteral):
+            return ty.literal_value
+        return None
+
 
 def analyze(
     func_ir: Any,
@@ -379,7 +443,7 @@ def analyze(
     found = analysis.collect()
     if targetoptions.get("device"):
         if found:
-            _, kind, line = found[0]
+            _, kind, line, _ = found[0]
             raise TypedPipelineError(
                 f"coop.{kind} at line {line} "
                 f"is inside {func_id.func_qualname!r}, a separately "
