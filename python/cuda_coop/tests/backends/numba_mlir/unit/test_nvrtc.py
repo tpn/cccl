@@ -30,6 +30,14 @@ from cuda.coop.numba_mlir._compiler import _nvrtc
 pytestmark = [pytest.mark.backend_numba_mlir, pytest.mark.unit]
 
 
+@pytest.fixture(autouse=True)
+def _fresh_compile_contexts():
+    """Keep contexts resolved from fake toolchains out of other tests."""
+    _nvrtc.clear_compile_context_cache()
+    yield
+    _nvrtc.clear_compile_context_cache()
+
+
 def _fake_nvrtc(
     actual_version: tuple[int, int],
     *,
@@ -205,6 +213,7 @@ def test_resolve_context_preserves_order_and_recursive_header_identity(
     ordered[:] = [second, first, cuda]
     reverse = _nvrtc.resolve_compile_context()
     (first / "header.cuh").write_bytes(b"mutated content")
+    _nvrtc.clear_compile_context_cache()
     mutated = _nvrtc.resolve_compile_context()
 
     assert forward.include_dirs == tuple(
@@ -215,6 +224,73 @@ def test_resolve_context_preserves_order_and_recursive_header_identity(
     )
     assert forward.header_identity != reverse.header_identity
     assert reverse.header_identity != mutated.header_identity
+
+
+def test_resolve_context_hashes_each_header_selection_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    roots = {}
+    for name in ("default", "configured"):
+        root = tmp_path / name
+        root.mkdir()
+        (root / "header.cuh").write_bytes(name.encode())
+        roots[name] = root
+    cuda = tmp_path / "cuda"
+    cuda.mkdir()
+    selections: list[object] = []
+    identities: list[tuple[str, ...]] = []
+
+    def resolve_paths(**kwargs):
+        (configured,) = kwargs["configured_roots"]
+        selections.append(configured)
+        root = roots["configured" if configured else "default"]
+        return SimpleNamespace(as_tuple=lambda: (root, cuda), cuda=(cuda,))
+
+    def identify(include_dirs):
+        identities.append(include_dirs)
+        return include_dirs_identity(include_dirs)
+
+    monkeypatch.setattr(_nvrtc, "resolve_include_paths", resolve_paths)
+    monkeypatch.setattr(
+        _nvrtc,
+        "preload_toolkit_compiler_libraries",
+        lambda paths: _libraries(),
+    )
+    monkeypatch.setattr(_nvrtc, "_load_nvrtc", lambda: _fake_nvrtc((13, 3)))
+    monkeypatch.setattr(_nvrtc, "include_dirs_identity", identify)
+    monkeypatch.delenv("CUDA_COOP_CCCL_ROOT", raising=False)
+
+    default = _nvrtc.resolve_compile_context()
+    assert _nvrtc.resolve_compile_context() is default
+
+    monkeypatch.setenv("CUDA_COOP_CCCL_ROOT", str(roots["configured"]))
+    configured = _nvrtc.resolve_compile_context()
+    monkeypatch.delenv("CUDA_COOP_CCCL_ROOT")
+    assert _nvrtc.resolve_compile_context() is default
+
+    (roots["default"] / "header.cuh").write_bytes(b"edited")
+    assert _nvrtc.resolve_compile_context() is default
+    _nvrtc.clear_compile_context_cache()
+    edited = _nvrtc.resolve_compile_context()
+
+    assert selections == [
+        None,
+        None,
+        str(roots["configured"]),
+        None,
+        None,
+        None,
+    ]
+    assert configured.include_dirs == (str(roots["configured"]), str(cuda))
+    assert configured.header_identity != default.header_identity
+    assert edited.include_dirs == default.include_dirs
+    assert edited.header_identity != default.header_identity
+    assert identities == [
+        default.include_dirs,
+        configured.include_dirs,
+        default.include_dirs,
+    ]
 
 
 @pytest.mark.parametrize(
