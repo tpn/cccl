@@ -465,11 +465,8 @@ def test_case(name):
     assert re.search(pattern, typed_ir, re.MULTILINE), typed_ir
 
 
-def test_a_load_through_a_tuple_does_not_type_the_payload():
-    """A tuple projection does not refine the payload it projects.
-
-    Refining it would need a Numba-CUDA-MLIR change.
-    """
+def test_a_load_through_a_tuple_types_the_payload():
+    """A tuple projection refines the payload it projects."""
 
     def tuple_shape(src, dst):
         block = coop.this_block()
@@ -479,9 +476,8 @@ def test_a_load_through_a_tuple_does_not_type_the_payload():
         for i in range(ITEMS):
             dst[base + i] = td[i]
 
-    with pytest.raises(
-        Exception, match=r"array\(float32, 1d, C\), int64, undefined"
-    ):
-        testing.compile_kernel(
-            tuple_shape, types.void(F32, F32), block=BLOCK, chip=CHIP
-        )
+    compiled = testing.compile_kernel(
+        tuple_shape, types.void(F32, F32), block=BLOCK, chip=CHIP
+    )
+    pattern = rf"^\s*td = call .* :: {re.escape(F32_PRODUCER)}$"
+    assert re.search(pattern, compiled.typed_ir, re.MULTILINE)

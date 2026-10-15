@@ -40,12 +40,15 @@ from . import _bridges as nb
 NCM_VERSION = "0.5.4"
 
 try:
+    from numba_cuda_mlir.numba_cuda.core import typeinfer
     from numba_cuda_mlir.typing import cuda as cuda_typing
 except ImportError as exc:
     raise nb.TypedPipelineUnavailableError(
         "The cuda.coop typed pipeline patches Numba-CUDA-MLIR "
         f"{NCM_VERSION}; the installed compiler is missing {exc.name or exc}."
     ) from exc
+
+from ._types import ThreadDataType
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,16 @@ def check(patch: Patch) -> None:
     )
 
 
+def holds_thread_data(ty: Any) -> bool:
+    """Whether ``ty`` is a ``ThreadDataType`` or a tuple holding one."""
+
+    if isinstance(ty, ThreadDataType):
+        return True
+    return isinstance(ty, nb.types.BaseTuple) and any(
+        holds_thread_data(item) for item in ty.types
+    )
+
+
 # Argument-sized cuda.local.array (U-P-1) ------------------------------------
 
 _LOCAL_ARRAY_PARAMETERS = ("shape", "dtype", "alignment", "alignas")
@@ -159,7 +172,82 @@ LOCAL_ARRAY_SHAPE = Patch(
     ),
 )
 
-PATCHES = (LOCAL_ARRAY_SHAPE,)
+
+# Payload through a tuple alias (U-H1-4) -------------------------------------
+
+
+def _tuple_refinement() -> tuple[tuple[type, str, Any], ...]:
+    """Refine a tuple's items from a refined projection of the tuple.
+
+    Numba-CUDA-MLIR's ``static_getitem`` and ``build_tuple`` constraints
+    have no ``refine`` hook, so refining ``x = (td,)[0]`` never reaches
+    ``td``. With this patch a refined projection refines the tuple's item
+    type, and a refined tuple refines the variables it was built from.
+
+    Scope: cooperative types only. A constraint takes part only when the
+    tuple holds a ``ThreadDataType``, and refines only items that do.
+    """
+
+    static_getitem = typeinfer.StaticGetItemConstraint.__call__
+    build_tuple = typeinfer.BuildTupleConstraint.__call__
+
+    def static_getitem_call(self, typeinfer_):
+        static_getitem(self, typeinfer_)
+        tuple_var = typeinfer_.typevars[self.value.name]
+        if (
+            isinstance(self.index, int)
+            and tuple_var.defined
+            and holds_thread_data(tuple_var.getone())
+        ):
+            typeinfer_.refine_map.setdefault(self.target, self)
+
+    def static_getitem_refine(self, typeinfer_, target_type):
+        if not holds_thread_data(target_type):
+            return
+        items = list(typeinfer_.typevars[self.value.name].getone().types)
+        items[self.index] = target_type
+        typeinfer_.add_type(
+            self.value.name,
+            nb.types.BaseTuple.from_types(items),
+            loc=self.loc,
+        )
+
+    def build_tuple_call(self, typeinfer_):
+        build_tuple(self, typeinfer_)
+        target = typeinfer_.typevars[self.target]
+        if target.defined and holds_thread_data(target.getone()):
+            typeinfer_.refine_map.setdefault(self.target, self)
+
+    def build_tuple_refine(self, typeinfer_, target_type):
+        if not isinstance(target_type, nb.types.BaseTuple):
+            return
+        for item, item_type in zip(self.items, target_type.types):
+            if holds_thread_data(item_type) and item_type.is_precise():
+                typeinfer_.add_type(
+                    item.name, item_type, loc=self.loc, unless_locked=True
+                )
+
+    return (
+        (typeinfer.StaticGetItemConstraint, "__call__", static_getitem_call),
+        (typeinfer.StaticGetItemConstraint, "refine", static_getitem_refine),
+        (typeinfer.BuildTupleConstraint, "__call__", build_tuple_call),
+        (typeinfer.BuildTupleConstraint, "refine", build_tuple_refine),
+    )
+
+
+TUPLE_REFINEMENT = Patch(
+    name="tuple refinement",
+    ask="U-H1-4 (refine hooks for tuples)",
+    pins=(
+        Pin(typeinfer.StaticGetItemConstraint, "__call__", "8b86dc739bada065"),
+        Pin(typeinfer.StaticGetItemConstraint, "refine", None),
+        Pin(typeinfer.BuildTupleConstraint, "__call__", "c54497d13b566d89"),
+        Pin(typeinfer.BuildTupleConstraint, "refine", None),
+    ),
+    build=_tuple_refinement,
+)
+
+PATCHES = (LOCAL_ARRAY_SHAPE, TUPLE_REFINEMENT)
 
 _ABSENT = object()
 _replaced: list[tuple[type, str, Any]] = []
@@ -188,10 +276,12 @@ __all__ = [
     "LOCAL_ARRAY_SHAPE",
     "NCM_VERSION",
     "PATCHES",
+    "TUPLE_REFINEMENT",
     "Patch",
     "Pin",
     "apply",
     "check",
+    "holds_thread_data",
     "replaced",
     "source_digest",
 ]

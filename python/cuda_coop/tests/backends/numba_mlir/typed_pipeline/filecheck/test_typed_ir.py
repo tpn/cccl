@@ -90,6 +90,36 @@ def test_store_destination_types_a_payload_without_a_load():
     )
 
 
+def test_a_load_through_a_tuple_alias_types_the_payload():
+    @cuda.jit
+    def packed(source, output):
+        block = coop.this_block()
+        items = coop.ThreadData(4)
+        alias = (items,)[0]
+        coop.load(block, source, alias)
+        coop.store(block, output, items)
+
+    testing.check(
+        packed,
+        f32_in_out(),
+        """
+        CHECK-LABEL: typed-ir packed
+        CHECK:         items = call
+        CHECK-SAME:      :: coop.ThreadData(float32, items=4, producer)
+        CHECK:         = build_tuple(items=[Var(items,
+        CHECK-SAME:      :: UniTuple(coop.ThreadData(float32, items=4,
+        CHECK-SAME:      producer) x 1)
+        CHECK:         alias = static_getitem(
+        CHECK-SAME:      :: coop.ThreadData(float32, items=4, producer)
+        CHECK:         _coop_store_wrapper_{{.*}}_value = items
+        CHECK-SAME:      :: coop.ThreadData(float32, items=4, producer)
+        """,
+        dump="typed_ir",
+        block=BLOCK,
+        chip=CHIP,
+    )
+
+
 def test_transposing_algorithm_gets_a_static_shared_backing():
     @cuda.jit
     def kt(source, output):

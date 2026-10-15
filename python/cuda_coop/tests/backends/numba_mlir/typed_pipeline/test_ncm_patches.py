@@ -46,7 +46,13 @@ print("changed", changed)
 """
 )
 
-PATCHED = ["LocalArrayTemplate.generic"]
+PATCHED = [
+    "BuildTupleConstraint.__call__",
+    "BuildTupleConstraint.refine",
+    "LocalArrayTemplate.generic",
+    "StaticGetItemConstraint.__call__",
+    "StaticGetItemConstraint.refine",
+]
 
 
 @pytest.mark.parametrize("pipeline", [None, "planner"])
@@ -175,3 +181,39 @@ def test_a_tuple_local_array_shape_from_an_argument_is_still_refused():
 
     with pytest.raises(TypingError, match=r"No implementation of function"):
         tuple_shape[1, 1](np.zeros(1, np.int32), 2)
+
+
+# Payload through a tuple alias (U-H1-4) -------------------------------------
+
+
+def test_tuple_refinement_is_scoped_to_thread_data():
+    from numba_cuda_mlir import types
+
+    from cuda.coop.numba_mlir._pipeline._ncm_patches import holds_thread_data
+    from cuda.coop.numba_mlir._pipeline._types import ThreadDataType
+
+    payload = ThreadDataType(types.float32, 4)
+    plain = types.float32[::1]
+    assert holds_thread_data(types.Tuple((plain, types.UniTuple(payload, 1))))
+    assert not holds_thread_data(types.Tuple((plain, types.int64)))
+    assert not holds_thread_data(plain)
+
+
+@requires_typed_pipeline
+def test_a_plain_kernel_projecting_tuples_is_unchanged():
+    from numba_cuda_mlir import cuda, types
+
+    @cuda.jit
+    def projected(source, output, scale):
+        values = cuda.local.array(4, types.float32)
+        pair = (values, scale)
+        alias = pair[0]
+        for i in range(4):
+            alias[i] = source[i] * pair[1]
+        nested = ((values,), 1)
+        output[cuda.threadIdx.x] = nested[0][0][3] + nested[-1]
+
+    source = np.arange(4, dtype=np.float32) + 1
+    output = np.zeros(32, np.float32)
+    projected[1, 32](source, output, np.float32(2))
+    np.testing.assert_array_equal(output, 9)

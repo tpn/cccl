@@ -29,6 +29,8 @@ MLIR dialects, lowering utilities      public re-exports
                                        lowering
 patch: argument-sized                  U-P-1: ``cuda.local.array`` requests a
 ``cuda.local.array``                   literal for a non-literal shape
+patch: tuple refinement                U-H1-4: refine hooks for
+                                       ``static_getitem`` and ``build_tuple``
 =====================================  =======================================
 
 Importing this module fails with ``TypedPipelineUnavailableError`` when any
