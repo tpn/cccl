@@ -23,6 +23,8 @@ Bridge                                 Replaced by
 ``LTOIR`` (class name)                 link kinds detected by ``isinstance``
 ``types.undefined``, ``unliteral``     public re-exports
 templates, models, IR utilities        public re-exports
+MLIR dialects, lowering utilities      public re-exports
+``external_abi_function_type``         a public external-call builder
 =====================================  =======================================
 
 Importing this module fails with ``TypedPipelineUnavailableError`` when any
@@ -42,7 +44,19 @@ class TypedPipelineUnavailableError(ImportError):
 
 try:
     from numba_cuda_mlir import cuda, extending
-    from numba_cuda_mlir.extending import lowering_registry, typing_registry
+    from numba_cuda_mlir._mlir import ir as mlir_ir
+    from numba_cuda_mlir._mlir.dialects import arith, func, gpu, llvm, memref
+    from numba_cuda_mlir._mlir.extras import types as mlir_types
+    from numba_cuda_mlir.extending import (
+        lowering_registry,
+        require_launch_config,
+        typing_registry,
+    )
+    from numba_cuda_mlir.lowering_utilities import (
+        get_or_insert_function,
+        memref_data_pointer,
+        user_signature_to_external_abi_signature,
+    )
     from numba_cuda_mlir.models import (
         ArrayModel,
         PrimitiveModel,
@@ -145,6 +159,17 @@ def refresh_registries() -> None:
     extending.refresh_registries()
 
 
+def external_abi_function_type(builder: Any, sig: Any) -> Any:
+    """Return the MLIR function type of an external call with Numba's ABI.
+
+    The lowering builder has no public way to declare an external function
+    taking a return pointer followed by C-ABI operands.
+    """
+
+    abi_sig = user_signature_to_external_abi_signature(sig)
+    return builder._external_abi_function_type(abi_sig, numba_abi=True)
+
+
 __all__ = [
     "LTOIR",
     "AbstractTemplate",
@@ -154,19 +179,30 @@ __all__ = [
     "PrimitiveModel",
     "Rewrite",
     "TypedPipelineUnavailableError",
+    "arith",
     "attach_inline_wrapper",
     "bound_function",
     "build_definitions",
     "cuda",
     "errors",
     "extending",
+    "external_abi_function_type",
     "force_literal_arg",
+    "func",
+    "get_or_insert_function",
+    "gpu",
     "ir",
+    "llvm",
     "lowering_registry",
+    "memref",
+    "memref_data_pointer",
+    "mlir_ir",
+    "mlir_types",
     "rebind_targetoptions",
     "refresh_registries",
     "register_after_inference_rewrite",
     "register_model",
+    "require_launch_config",
     "resolve_gpu_target",
     "signature",
     "types",

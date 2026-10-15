@@ -36,8 +36,9 @@ def _activate() -> None:
     global _activated
     if _activated:
         return
-    from . import _bridges, _storage_pass, _templates
+    from . import _bridges, _storage_pass, _templates, _types
 
+    _types.register()
     _templates.register()
     _storage_pass.register()
     _bridges.refresh_registries()
