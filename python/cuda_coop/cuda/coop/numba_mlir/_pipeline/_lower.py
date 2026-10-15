@@ -14,7 +14,9 @@ was decided by call resolution and stored in
   the constructor's own ``alignment=`` asks;
 * a ``load`` or ``store`` is a ``func.call`` to the provider, with the
   scratch pointer first when the provider takes one, then the memory and
-  payload pointers, followed by a ``gpu.barrier`` when the plan has one.
+  payload pointers, then the runtime controls converted to their ABI
+  types, followed by a ``gpu.barrier`` when the plan has one. A scalar
+  ``store`` value is boxed into a one-item array first.
 """
 
 from __future__ import annotations
@@ -77,15 +79,53 @@ def _call_entry(builder, target) -> Any:
     return entry
 
 
+def _box(builder, var, dtype, value):
+    element = builder.get_storage_type(dtype)
+    with builder.alloca_insertion_point():
+        array = nb.memref.alloca(
+            nb.mlir_ir.MemRefType.get([1], element), [], []
+        )
+    if value is None:
+        item = nb.cast_value(
+            builder,
+            builder.load_var(var),
+            builder.get_numba_type(var.name),
+            dtype,
+        )
+    else:
+        item = nb.arith.constant(element, value.item())
+    zero = nb.arith.constant(nb.mlir_ir.IndexType.get(), 0)
+    nb.memref.store(item, array, [zero])
+    return array
+
+
+def _operand(builder, operand, abi_type, args, keywords):
+    tag = operand[0]
+    if tag == "scratch":
+        return nb.memref_data_pointer(
+            builder.load_var(keywords[SCRATCH_KEYWORD])
+        )
+    if tag == "pointer":
+        return nb.memref_data_pointer(builder.load_var(args[operand[1]]))
+    if tag == "box":
+        _, index, dtype, value = operand
+        return nb.memref_data_pointer(_box(builder, args[index], dtype, value))
+    var = keywords[operand[1]]
+    return nb.cast_value(
+        builder,
+        builder.load_var(var),
+        builder.get_numba_type(var.name),
+        abi_type,
+    )
+
+
 def _lower_operation(builder, target, args, kwargs):
     entry = _call_entry(builder, target)
     keywords = dict(kwargs or [])
-    operands = []
-    if entry.scratch:
-        scratch = builder.load_var(keywords[SCRATCH_KEYWORD])
-        operands.append(nb.memref_data_pointer(scratch))
-    for index in entry.pointer_arguments:
-        operands.append(nb.memref_data_pointer(builder.load_var(args[index])))
+    operands = [
+        _operand(builder, operand, abi_type, args, keywords)
+        for operand, abi_type in zip(entry.operands, entry.abi_arguments)
+    ]
     function_type = nb.external_abi_function_type(
         builder, nb.signature(nb.types.void, *entry.abi_arguments)
     )

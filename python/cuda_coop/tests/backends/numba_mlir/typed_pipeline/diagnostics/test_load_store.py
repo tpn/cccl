@@ -28,61 +28,6 @@ def _compile(kernel, signature=None, block=BLOCK):
     )
 
 
-def test_load_refuses_valid_items():
-    def kernel(source, output):
-        block = coop.this_block()
-        items = coop.ThreadData(4)
-        coop.load(block, source, items, valid_items=100)
-        coop.store(block, output, items)
-
-    with pytest.raises(Exception, match=r"coop\.load: valid_items= is not"):
-        _compile(kernel)
-
-
-def test_load_refuses_oob_default():
-    def kernel(source, output):
-        block = coop.this_block()
-        items = coop.ThreadData(4)
-        coop.load(block, source, items, oob_default=0.0)
-        coop.store(block, output, items)
-
-    with pytest.raises(Exception, match=r"coop\.load: oob_default= is not"):
-        _compile(kernel)
-
-
-def test_load_refuses_offset():
-    def kernel(source, output):
-        block = coop.this_block()
-        items = coop.ThreadData(4)
-        coop.load(block, source, items, offset=128)
-        coop.store(block, output, items)
-
-    with pytest.raises(Exception, match=r"coop\.load: offset= is not"):
-        _compile(kernel)
-
-
-def test_store_refuses_valid_items():
-    def kernel(source, output):
-        block = coop.this_block()
-        items = coop.ThreadData(4)
-        coop.load(block, source, items)
-        coop.store(block, output, items, valid_items=100)
-
-    with pytest.raises(Exception, match=r"coop\.store: valid_items= is not"):
-        _compile(kernel)
-
-
-def test_store_refuses_offset():
-    def kernel(source, output):
-        block = coop.this_block()
-        items = coop.ThreadData(4)
-        coop.load(block, source, items)
-        coop.store(block, output, items, offset=128)
-
-    with pytest.raises(Exception, match=r"coop\.store: offset= is not"):
-        _compile(kernel)
-
-
 def test_explicit_temp_storage_is_refused():
     def kernel(source, output):
         block = coop.this_block()
@@ -107,16 +52,6 @@ def test_a_group_other_than_the_block_is_refused():
 
     with pytest.raises(
         Exception, match=r"coop\.load: the group must be coop\.this_block\(\)"
-    ):
-        _compile(kernel)
-
-
-def test_a_scalar_store_value_is_refused():
-    def kernel(source, output):
-        coop.store(coop.this_block(), output, source[0])
-
-    with pytest.raises(
-        Exception, match=r"coop\.store: a scalar value \(float32\) is not"
     ):
         _compile(kernel)
 

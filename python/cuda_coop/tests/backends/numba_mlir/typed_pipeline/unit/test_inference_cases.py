@@ -357,7 +357,13 @@ CASES = {
     "k1": Case(k1, (F32, F32), ("items", F32_PRODUCER)),
     "kw": Case(kw, (F32, F32), ("td", F32_PRODUCER)),
     "kw_positional": Case(kw_positional, (F32, F32), ("td", F32_PRODUCER)),
-    "phi_plain": Case(phi_plain, (F32, F32, I32), error=r"has no typed extent"),
+    # Which side of the join Numba types first depends on what the process
+    # has already compiled; a plain array first unifies to a plain array.
+    "phi_plain": Case(
+        phi_plain,
+        (F32, F32, I32),
+        error=r"has no typed extent|cannot share a variable with a plain array",
+    ),
     "phi_plain_ld": Case(
         phi_plain_ld,
         (F32, F32, I32),

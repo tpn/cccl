@@ -25,6 +25,8 @@ Bridge                                 Replaced by
 templates, models, IR utilities        public re-exports
 MLIR dialects, lowering utilities      public re-exports
 ``external_abi_function_type``         a public external-call builder
+``cast_value``                         a public value-conversion helper for
+                                       lowering
 =====================================  =======================================
 
 Importing this module fails with ``TypedPipelineUnavailableError`` when any
@@ -170,6 +172,16 @@ def external_abi_function_type(builder: Any, sig: Any) -> Any:
     return builder._external_abi_function_type(abi_sig, numba_abi=True)
 
 
+def cast_value(builder: Any, value: Any, source: Any, target: Any) -> Any:
+    """Convert an MLIR ``value`` of Numba type ``source`` to ``target``.
+
+    This is the conversion Numba applies to a call argument, such as a
+    narrowing or a sign extension.
+    """
+
+    return builder.lower_cast(source, target, value)
+
+
 __all__ = [
     "LTOIR",
     "AbstractTemplate",
@@ -183,6 +195,7 @@ __all__ = [
     "attach_inline_wrapper",
     "bound_function",
     "build_definitions",
+    "cast_value",
     "cuda",
     "errors",
     "extending",

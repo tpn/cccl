@@ -66,8 +66,9 @@ _NOT_KERNEL_CALLABLE = frozenset(
     }
 )
 
-# Arguments the typed pipeline does not take yet, by operation.
-_REFUSED_CONTROLS = {
+# Optional scalar controls, in the order coop's providers take them at run
+# time.
+CONTROLS = {
     "load": ("valid_items", "oob_default", "offset"),
     "store": ("valid_items", "offset"),
 }
@@ -311,7 +312,12 @@ OPERATIONS: dict[Callable, str] = {
 class LoadStoreRequest:
     """A typed ``load`` or ``store``, before the launch is known.
 
-    Requests are interned by ``key``, so identity is equality.
+    ``controls`` holds coop's ``ArgumentBinding`` for each control the call
+    supplies, in ``CONTROLS`` order. A static binding carries its value and
+    a runtime one does not, so two calls that differ only in a runtime
+    value have the same request, and two that differ in a static value do
+    not. Requests are interned by ``key``, so identity is equality.
+
     ``call`` is coop's ``GroupPrimitiveCall``; call resolution completes
     it with ``plan_group_primitive`` once it knows the block.
     """
@@ -320,17 +326,40 @@ class LoadStoreRequest:
     dtype: Any
     items_per_thread: int
     algorithm: str
+    group: Any
+    controls: tuple[tuple[str, Any], ...]
     call: Any
 
     @property
     def key(self) -> tuple:
-        return (self.kind, self.dtype, self.items_per_thread, self.algorithm)
+        return _request_key(
+            self.kind,
+            self.dtype,
+            self.items_per_thread,
+            self.algorithm,
+            self.controls,
+        )
+
+    def binding(self, name: str) -> Any:
+        """Return the binding of control ``name``, or ``None`` if omitted."""
+
+        return dict(self.controls).get(name)
 
 
 _REQUESTS: dict[tuple, LoadStoreRequest] = {}
 
 
-def _make_request(kind, group, dtype, items, algorithm) -> LoadStoreRequest:
+def _request_key(kind, dtype, items, algorithm, controls) -> tuple:
+    return (
+        kind,
+        dtype,
+        items,
+        algorithm,
+        tuple((name, b.semantic_key) for name, b in controls),
+    )
+
+
+def _intern(kind, group, dtype, items, algorithm, controls=()):
     from ..._core import ArgumentBinding
     from ..._core.group._model import GroupPrimitiveCall
     from ..._core.group.load_store import (
@@ -340,17 +369,48 @@ def _make_request(kind, group, dtype, items, algorithm) -> LoadStoreRequest:
     )
     from .._lowering._core import NumbaMlirCoreAdapter
 
-    semantics = GroupLoadStoreSemantics(
-        kind=GroupLoadStoreKind(kind),
-        dtype=NumbaMlirCoreAdapter().core_dtype(dtype),
-        items_per_thread=items,
-        algorithm=GroupLoadStoreAlgorithm(algorithm),
-        valid_items=ArgumentBinding.omitted(),
-        oob_default=ArgumentBinding.omitted(),
-        offset=ArgumentBinding.omitted(),
-    )
+    key = _request_key(kind, dtype, items, algorithm, controls)
+    request = _REQUESTS.get(key)
+    if request is not None:
+        return request
+    bindings = dict(controls)
+    omitted = ArgumentBinding.omitted()
+    try:
+        semantics = GroupLoadStoreSemantics(
+            kind=GroupLoadStoreKind(kind),
+            dtype=NumbaMlirCoreAdapter().core_dtype(dtype),
+            items_per_thread=items,
+            algorithm=GroupLoadStoreAlgorithm(algorithm),
+            valid_items=bindings.get("valid_items", omitted),
+            oob_default=bindings.get("oob_default", omitted),
+            offset=bindings.get("offset", omitted),
+        )
+    except (TypeError, ValueError) as exc:
+        raise TypedPipelineError(f"coop.{kind}: {exc}") from None
     call = GroupPrimitiveCall(group=group.group, operation=semantics)
-    return LoadStoreRequest(kind, dtype, items, algorithm, call)
+    request = _REQUESTS[key] = LoadStoreRequest(
+        kind, dtype, items, algorithm, group, tuple(controls), call
+    )
+    return request
+
+
+def with_controls(
+    request: LoadStoreRequest, controls: tuple[tuple[str, Any], ...]
+) -> LoadStoreRequest:
+    """Return the request for ``request``'s transfer with ``controls``.
+
+    Raises the coop diagnostic for a combination coop rejects, such as
+    ``oob_default`` without ``valid_items``.
+    """
+
+    return _intern(
+        request.kind,
+        request.group,
+        request.dtype,
+        request.items_per_thread,
+        request.algorithm,
+        controls,
+    )
 
 
 def _algorithm(kind: str, ty: Any) -> str | None:
@@ -384,11 +444,6 @@ def _check_payload(kind: str, payload: Any) -> None:
             "extent. Use coop.ThreadData: a plain array's shape is not "
             "part of its type."
         )
-    if kind == "store" and isinstance(payload, nb.types.Number):
-        raise TypedPipelineError(
-            f"coop.store: a scalar value ({payload}) is not supported on "
-            "the typed pipeline yet; store a coop.ThreadData."
-        )
     raise TypedPipelineError(
         f"coop.{kind}: {name} must be a coop.ThreadData, got {payload}"
     )
@@ -400,8 +455,19 @@ def _bind_operation(kind: str, args, kws) -> dict:
     return bound
 
 
+def is_scalar_value(ty: Any) -> bool:
+    """Whether ``ty`` is a scalar ``store`` value rather than a payload."""
+
+    return isinstance(nb.unliteral(ty), (nb.types.Number, nb.types.Boolean))
+
+
 def _request(kind: str, args, kws) -> LoadStoreRequest | None:
     """Validate a typed call and return its interned request.
+
+    The request has no controls: whether a control is static or runtime
+    depends on where its value comes from, which site analysis reads
+    from the IR. A scalar ``store`` value stores one item per thread of the
+    destination's dtype; site analysis checks the value against it.
 
     Return ``None`` while the payload's dtype is still undefined, so that a
     later typing round retries with the refined payload.
@@ -415,12 +481,6 @@ def _request(kind: str, args, kws) -> LoadStoreRequest | None:
             f"coop.{kind}: explicit temp_storage= is not supported on the "
             "typed pipeline; omit it and the pipeline provides the scratch."
         )
-    for name in _REFUSED_CONTROLS[kind]:
-        if not _omitted(bound.get(name)):
-            raise TypedPipelineError(
-                f"coop.{kind}: {name}= is not supported on the typed "
-                "pipeline yet; omit it."
-            )
     group = bound.get("group")
     if not isinstance(group, CoopGroupType) or not group.is_block:
         raise TypedPipelineError(
@@ -433,28 +493,26 @@ def _request(kind: str, args, kws) -> LoadStoreRequest | None:
             f"coop.{kind}: {_MEMORY[kind]} must be an array, got {memory}"
         )
     payload = bound.get(_PAYLOAD[kind])
-    _check_payload(kind, payload)
-    if not payload.dtype.is_precise():
-        return None
-    if payload.dtype != memory.dtype:
-        raise TypedPipelineError(
-            f"coop.{kind}: payload dtype {payload.dtype} conflicts with "
-            f"{_MEMORY[kind]} dtype {memory.dtype}"
-        )
+    if kind == "store" and is_scalar_value(payload):
+        dtype, items = memory.dtype, 1
+    else:
+        _check_payload(kind, payload)
+        if not payload.dtype.is_precise():
+            return None
+        if payload.dtype != memory.dtype:
+            raise TypedPipelineError(
+                f"coop.{kind}: payload dtype {payload.dtype} conflicts with "
+                f"{_MEMORY[kind]} dtype {memory.dtype}"
+            )
+        dtype, items = payload.dtype, payload.items
     algorithm = _algorithm(kind, bound.get("algorithm"))
     if algorithm is None:
         return None
     try:
-        validate_common_numeric_dtype_name(str(payload.dtype), operation=kind)
+        validate_common_numeric_dtype_name(str(dtype), operation=kind)
     except TypeError as exc:
         raise TypedPipelineError(str(exc)) from None
-    key = (kind, payload.dtype, payload.items, algorithm)
-    request = _REQUESTS.get(key)
-    if request is None:
-        request = _REQUESTS[key] = _make_request(
-            kind, group, payload.dtype, payload.items, algorithm
-        )
-    return request
+    return _intern(kind, group, dtype, items, algorithm)
 
 
 def request_for(kind: str, args, kws) -> LoadStoreRequest:
@@ -591,7 +649,12 @@ def register() -> None:
         register_template(
             op, _operation(kind), f"private_{kind}", prefer_literal=True
         )
-    for key in (ThreadDataType, nb.types.Array, nb.types.Number):
+    for key in (
+        ThreadDataType,
+        nb.types.Array,
+        nb.types.Number,
+        nb.types.Boolean,
+    ):
         nb.typing_registry.register_attr(_witness_template(key))
     for method in ("refine_load", "refine_store"):
         nb.lowering_registry.lower(
@@ -604,15 +667,18 @@ def register() -> None:
 
 
 __all__ = [
+    "CONTROLS",
     "OPERATIONS",
     "WRAPPER_SOURCE",
     "LoadStoreRequest",
     "constructor_alignment",
     "group_operation",
+    "is_scalar_value",
     "is_wrapper_location",
     "kernel_primitives",
     "make_wrapper",
     "register",
     "register_template",
     "request_for",
+    "with_controls",
 ]

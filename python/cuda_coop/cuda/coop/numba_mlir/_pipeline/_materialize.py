@@ -7,7 +7,8 @@
 Storage materialization is the last stage of ``CoopCallResolution``, and the
 only one that changes the IR. It:
 
-* selects each site's provider method and its ABI, as a ``CallEntry``;
+* selects each site's provider method and pairs its operands with where
+  lowering finds their values, as a ``CallEntry``;
 * prepends the scratch backing, a ``cuda.shared.array``, and the region's
   slice of it to the kernel's entry block, with their types;
 * passes the region to every call that uses scratch, as the
@@ -34,12 +35,24 @@ from ._storage import StorageLayout
 
 @dataclass(frozen=True)
 class CallEntry:
-    """What lowering emits for one call site."""
+    """What lowering emits for one call site.
+
+    ``operands`` follows ``abi_arguments``, one entry per provider operand:
+
+    ``("scratch",)``
+        the scratch region's pointer;
+    ``("pointer", index)``
+        the data pointer of the call's argument ``index``;
+    ``("box", index, dtype, value)``
+        a one-item array of ``dtype`` holding the scalar argument ``index``,
+        or the static ``value`` when it is not ``None``;
+    ``("value", keyword)``
+        the call's keyword argument, converted to the ABI type.
+    """
 
     symbol: str
     abi_arguments: tuple
-    pointer_arguments: tuple[int, ...]
-    scratch: bool
+    operands: tuple
     barrier_after: bool
     link_items: tuple
 
@@ -76,17 +89,24 @@ def _ignored_parameter(parameter: Any) -> bool:
     )
 
 
+def _inputs(method: Any) -> list:
+    return [p for p in method if not _ignored_parameter(p) and not p.is_output]
+
+
 def _select_method(algorithm: Any, operands: int) -> Any:
     for method in algorithm.parameters:
-        inputs = [
-            p for p in method if not _ignored_parameter(p) and not p.is_output
-        ]
-        if len(inputs) == operands:
+        if len(_inputs(method)) == operands:
             return method
     raise AssertionError(f"{algorithm.c_name} has no {operands}-operand method")
 
 
-def _abi_arguments(method: Any) -> tuple:
+def _operands(method: Any, site: Site, algorithm: Any, scratch: bool) -> tuple:
+    """Pair each provider operand with where lowering finds its value.
+
+    Coop's providers take the scratch pointer, the memory pointer, the
+    payload, then the runtime controls in ``CONTROLS`` order.
+    """
+
     from .. import _types as coop_types
 
     pointer_kinds = (
@@ -94,26 +114,40 @@ def _abi_arguments(method: Any) -> tuple:
         coop_types.Array,
         coop_types.PointerReference,
     )
-    arguments = []
-    for parameter in method:
-        if _ignored_parameter(parameter) or parameter.is_output:
-            continue
+    payload = (
+        ("pointer", 2)
+        if site.scalar is None
+        else ("box", 2, site.request.dtype, site.scalar.value)
+    )
+    pointers = [("scratch",)] * scratch + [("pointer", 1), payload]
+    runtime = [
+        ("value", name)
+        for name, binding in site.request.controls
+        if binding.kind.value == "runtime"
+    ]
+    abi_arguments, operands = [], []
+    for parameter in _inputs(method):
         if isinstance(parameter, pointer_kinds):
-            arguments.append(nb.types.CPointer(nb.types.none))
+            abi_arguments.append(nb.types.CPointer(nb.types.none))
+            operands.append(pointers.pop(0))
         else:
-            arguments.append(parameter.dtype())
-    return tuple(arguments)
+            abi_arguments.append(parameter.dtype())
+            operands.append(runtime.pop(0))
+    if pointers or runtime:
+        raise AssertionError(f"{algorithm.c_name}: operands left over")
+    return tuple(abi_arguments), tuple(operands)
 
 
 def _call_entry(
-    algorithm: Any, scratch: bool, barrier: bool, bundle: Bundle
+    site: Site, algorithm: Any, scratch: bool, barrier: bool, bundle: Bundle
 ) -> CallEntry:
-    method = _select_method(algorithm, 2 + int(scratch))
+    runtime = sum(b.kind.value == "runtime" for _, b in site.request.controls)
+    method = _select_method(algorithm, 2 + scratch + runtime)
+    abi_arguments, operands = _operands(method, site, algorithm, scratch)
     return CallEntry(
         symbol=algorithm.mangled_name(method) + "__abi",
-        abi_arguments=_abi_arguments(method),
-        pointer_arguments=(1, 2),
-        scratch=scratch,
+        abi_arguments=abi_arguments,
+        operands=operands,
         barrier_after=barrier,
         link_items=(bundle.link_item,),
     )
@@ -208,7 +242,9 @@ def materialize(
     """Rewrite the IR for the resolved storage; return each call's entry."""
 
     calls = {
-        site.stmt.target.name: _call_entry(algorithm, scratch, barrier, bundle)
+        site.stmt.target.name: _call_entry(
+            site, algorithm, scratch, barrier, bundle
+        )
         for site, algorithm, scratch, barrier in zip(
             sites,
             specialization.site_algorithms,

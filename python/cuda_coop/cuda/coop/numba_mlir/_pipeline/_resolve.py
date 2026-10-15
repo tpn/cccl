@@ -38,8 +38,25 @@ from ._materialize import CallEntry, CoopPlan
 from ._plan import KernelPlan, SitePlan
 
 
+def _describe(binding: Any) -> str:
+    if binding.kind.value == "runtime":
+        return "runtime"
+    value = binding.value
+    return str(value.item() if hasattr(value, "item") else value)
+
+
 def _site_plan(index, site, block, region, barrier_after) -> SitePlan:
     request = site.request
+    value = ()
+    if site.scalar is not None:
+        value = (
+            (
+                "value",
+                "runtime"
+                if site.scalar.value is None
+                else f"{site.scalar.value.item()!r}",
+            ),
+        )
     return SitePlan(
         index=index,
         operation=site.kind,
@@ -49,6 +66,8 @@ def _site_plan(index, site, block, region, barrier_after) -> SitePlan:
             ("dtype", str(request.dtype)),
             ("items_per_thread", request.items_per_thread),
             ("block", "x".join(map(str, block))),
+            *value,
+            *((name, _describe(binding)) for name, binding in request.controls),
         ),
         region=region,
         barrier_after=barrier_after,
@@ -133,6 +152,7 @@ def resolve(state: Any, func_ir: Any, typemap: dict, calltypes: Any) -> None:
         func_ir,
         typemap,
         calltypes,
+        args=state.args,
         targetoptions=targetoptions,
         func_id=state.func_id,
     )

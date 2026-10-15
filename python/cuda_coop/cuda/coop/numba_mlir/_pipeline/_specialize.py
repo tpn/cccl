@@ -79,12 +79,11 @@ def _complete(request: LoadStoreRequest, block: tuple) -> tuple[Any, dict]:
     from .._lowering import _load_store
     from .._lowering._core import NumbaMlirCoreAdapter
 
-    plan = plan_group_primitive(
-        request.call, LaunchFacts(exact_block_dim=block)
-    )
     try:
-        plan = plan.require_supported()
-    except NotImplementedError as exc:
+        plan = plan_group_primitive(
+            request.call, LaunchFacts(exact_block_dim=block)
+        ).require_supported()
+    except (NotImplementedError, TypeError, ValueError) as exc:
         raise TypedPipelineError(f"coop.{request.kind}: {exc}") from None
     if plan.target is not GroupLoweringTarget.CUB_BLOCK:
         raise TypedPipelineError(
@@ -96,21 +95,22 @@ def _complete(request: LoadStoreRequest, block: tuple) -> tuple[Any, dict]:
     factory_name = (
         request.kind if storage_free else f"_{request.kind}_with_storage"
     )
-    completed = (
-        getattr(_load_store, factory_name),
-        {
-            "dtype": NumbaMlirCoreAdapter().normalize_dtype(
-                implementation.template_arguments["T"]
-            ),
-            "threads_per_block": block,
-            "items_per_thread": implementation.template_arguments[
-                "ITEMS_PER_THREAD"
-            ],
-            "algorithm": implementation.metadata["algorithm"],
-            "num_valid_items": ArgumentBinding.omitted(),
-            "offset": ArgumentBinding.omitted(),
-        },
-    )
+    omitted = ArgumentBinding.omitted()
+    kwargs = {
+        "dtype": NumbaMlirCoreAdapter().normalize_dtype(
+            implementation.template_arguments["T"]
+        ),
+        "threads_per_block": block,
+        "items_per_thread": implementation.template_arguments[
+            "ITEMS_PER_THREAD"
+        ],
+        "algorithm": implementation.metadata["algorithm"],
+        "num_valid_items": request.binding("valid_items") or omitted,
+        "offset": request.binding("offset") or omitted,
+    }
+    if request.binding("oob_default") is not None:
+        kwargs["oob_default"] = request.binding("oob_default")
+    completed = (getattr(_load_store, factory_name), kwargs)
     _COMPLETIONS[key] = completed
     return completed
 
