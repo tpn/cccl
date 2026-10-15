@@ -1,0 +1,177 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. ALL RIGHTS RESERVED.
+#
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+"""The typed pipeline's Numba-CUDA-MLIR patches: when they apply, their pins,
+and how kernels without cooperative types behave under them.
+
+Activation tests start a fresh interpreter per case and run in any mode; the
+kernels need typed mode.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from ._support import TYPED, requires_typed_pipeline, run_python
+
+_TARGETS = """
+from numba_cuda_mlir.typing import cuda as cuda_typing
+from numba_cuda_mlir.numba_cuda.core import typeinfer
+
+owners = (
+    cuda_typing.GenericArrayTemplate,
+    cuda_typing.LocalArrayTemplate,
+    typeinfer.Propagate,
+    typeinfer.CallConstraint,
+    typeinfer.StaticGetItemConstraint,
+    typeinfer.BuildTupleConstraint,
+)
+before = [dict(vars(owner)) for owner in owners]
+"""
+
+_REPORT = (
+    _TARGETS
+    + """
+import cuda.coop.numba_mlir
+
+changed = sorted(
+    f"{owner.__name__}.{name}"
+    for owner, old in zip(owners, before)
+    for name in set(old) | set(vars(owner))
+    if old.get(name) is not vars(owner).get(name)
+)
+print("changed", changed)
+"""
+)
+
+PATCHED = ["LocalArrayTemplate.generic"]
+
+
+@pytest.mark.parametrize("pipeline", [None, "planner"])
+def test_the_default_pipeline_leaves_the_compiler_untouched(pipeline):
+    result = run_python(_REPORT, pipeline)
+    assert result.returncode == 0, result.stderr
+    assert "changed []" in result.stdout
+
+
+def test_the_typed_pipeline_replaces_only_its_patch_targets():
+    result = run_python(_REPORT, "typed")
+    assert result.returncode == 0, result.stderr
+    assert f"changed {PATCHED}" in result.stdout
+
+
+def test_a_changed_patch_target_fails_closed():
+    code = (
+        _TARGETS
+        + """
+cuda_typing.GenericArrayTemplate.generic = lambda self: None
+try:
+    import cuda.coop.numba_mlir._pipeline as pipeline
+    pipeline._activate()
+except ImportError as exc:
+    print(type(exc).__name__, exc)
+print("local-array", "generic" in vars(cuda_typing.LocalArrayTemplate))
+"""
+    )
+    result = run_python(code, "typed")
+    assert result.returncode == 0, result.stderr
+    assert (
+        "TypedPipelineUnavailableError The cuda.coop typed pipeline's "
+        "'argument-sized cuda.local.array' patch was written against "
+        "Numba-CUDA-MLIR 0.5.4, but GenericArrayTemplate.generic has "
+        "changed. The patch is retired by U-P-1"
+    ) in result.stdout
+    assert "local-array False" in result.stdout
+
+
+def test_another_compiler_version_fails_closed():
+    code = """
+import numba_cuda_mlir
+numba_cuda_mlir.__version__ = "0.5.5"
+try:
+    import cuda.coop.numba_mlir._pipeline as pipeline
+    pipeline._activate()
+except ImportError as exc:
+    print(type(exc).__name__, exc)
+"""
+    result = run_python(code, "typed")
+    assert result.returncode == 0, result.stderr
+    assert (
+        "TypedPipelineUnavailableError The cuda.coop typed pipeline's "
+        "'argument-sized cuda.local.array' patch was written against "
+        "Numba-CUDA-MLIR 0.5.4, but the installed compiler is 0.5.5."
+    ) in result.stdout
+
+
+@requires_typed_pipeline
+def test_apply_is_idempotent():
+    from cuda.coop.numba_mlir._pipeline import _ncm_patches
+
+    replaced = _ncm_patches.replaced()
+    _ncm_patches.apply()
+    assert _ncm_patches.replaced() == replaced
+    assert sorted(f"{o.__name__}.{n}" for o, n in replaced) == PATCHED
+
+
+@pytest.mark.skipif(TYPED, reason="checks the pins without applying them")
+def test_the_pins_match_the_installed_compiler():
+    from cuda.coop.numba_mlir._pipeline import _ncm_patches
+
+    for patch in _ncm_patches.PATCHES:
+        _ncm_patches.check(patch)
+
+
+# Argument-sized cuda.local.array (U-P-1) ------------------------------------
+
+
+@requires_typed_pipeline
+def test_a_plain_kernel_with_an_argument_sized_local_array_compiles():
+    from numba_cuda_mlir import cuda, types
+
+    @cuda.jit
+    def triangle(output, n):
+        values = cuda.local.array(n, types.int32)
+        for i in range(n):
+            values[i] = i + 1
+        total = 0
+        for i in range(n):
+            total += values[i]
+        output[cuda.threadIdx.x] = total
+
+    output = np.zeros(32, np.int32)
+    for n in (3, 5, 3):
+        triangle[1, 32](output, n)
+        np.testing.assert_array_equal(output, n * (n + 1) // 2)
+    assert len(triangle.overloads) == 2
+
+
+@requires_typed_pipeline
+def test_a_computed_local_array_shape_is_still_refused():
+    from numba_cuda_mlir import cuda, types
+    from numba_cuda_mlir.numba_cuda.core.errors import TypingError
+
+    @cuda.jit
+    def computed(output, n):
+        values = cuda.local.array(n + 1, types.int32)
+        values[0] = 1
+        output[0] = values[0]
+
+    with pytest.raises(TypingError, match=r"Cannot request literal type"):
+        computed[1, 1](np.zeros(1, np.int32), 2)
+
+
+@requires_typed_pipeline
+def test_a_tuple_local_array_shape_from_an_argument_is_still_refused():
+    from numba_cuda_mlir import cuda, types
+    from numba_cuda_mlir.numba_cuda.core.errors import TypingError
+
+    @cuda.jit
+    def tuple_shape(output, n):
+        values = cuda.local.array((n, 2), types.int32)
+        values[0, 0] = 1
+        output[0] = values[0, 0]
+
+    with pytest.raises(TypingError, match=r"No implementation of function"):
+        tuple_shape[1, 1](np.zeros(1, np.int32), 2)

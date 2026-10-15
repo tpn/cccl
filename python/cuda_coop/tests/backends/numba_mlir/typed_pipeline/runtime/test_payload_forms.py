@@ -7,7 +7,8 @@ GPU and checked against NumPy.
 
 ``items_per_thread`` is the payload's extent, usable as a loop bound before
 the payload's dtype is known. A ``cuda.coop.numba_mlir`` load or store takes
-a ``cuda.local.array`` payload of constant shape.
+a ``cuda.local.array`` payload of constant shape, or sized by a kernel
+argument.
 """
 
 from __future__ import annotations
@@ -65,6 +66,24 @@ def test_items_per_thread_before_the_dtype_is_known():
     output = np.zeros(THREADS * 4, np.float32)
     fill[1, THREADS](output)
     np.testing.assert_array_equal(output, np.arange(THREADS * 4))
+
+
+@pytest.mark.parametrize("algorithm", ["direct", "transpose"])
+def test_a_local_array_payload_sized_by_a_kernel_argument(algorithm):
+    @cuda.jit
+    def copy(source, output, items_per_thread):
+        block = qualified_coop.this_block()
+        items = cuda.local.array(shape=items_per_thread, dtype=types.int32)
+        qualified_coop.load(block, source, items, algorithm=algorithm)
+        for i in range(items_per_thread):
+            items[i] += 7
+        qualified_coop.store(block, output, items, algorithm=algorithm)
+
+    for items_per_thread in (1, 4, 2):
+        source = _source(items_per_thread)
+        output = np.full_like(source, -1)
+        copy[1, THREADS](source, output, items_per_thread)
+        np.testing.assert_array_equal(output, source + 7)
 
 
 def test_a_local_array_payload_of_constant_shape_with_controls():

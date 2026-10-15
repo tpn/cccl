@@ -7,12 +7,15 @@
 ``items_per_thread`` types as the payload's extent, an integer literal,
 whether or not its dtype is known yet. A ``cuda.coop.numba_mlir`` call takes
 a ``cuda.local.array`` payload: its type is a plain array, and the site's
-extent comes from the array's constant shape.
+extent comes from the array's constant shape. A shape that is a kernel
+argument is requested as a literal.
 """
 
 from __future__ import annotations
 
+import pytest
 from numba_cuda_mlir import cuda, types
+from numba_cuda_mlir.numba_cuda.core.errors import ForceLiteralArg
 
 import cuda.coop.numba_mlir as qualified_coop
 from cuda import coop
@@ -46,6 +49,21 @@ def test_items_per_thread_is_the_extent_as_a_literal():
         block=BLOCK,
         chip=CHIP,
     )
+
+
+def test_a_local_array_sized_by_a_kernel_argument_requests_a_literal():
+    # A launch retries the kernel with the argument as a literal, which
+    # compiles as in the next test.
+    def kernel(source, output, items_per_thread):
+        block = qualified_coop.this_block()
+        items = cuda.local.array(items_per_thread, types.float32)
+        qualified_coop.load(block, source, items)
+        qualified_coop.store(block, output, items)
+
+    signature = types.void(*f32_in_out().args, types.int64)
+    with pytest.raises(ForceLiteralArg) as raised:
+        testing.compile_kernel(kernel, signature, block=BLOCK, chip=CHIP)
+    assert raised.value.requested_args == {2}
 
 
 def test_a_local_array_payload_sized_by_a_literal_argument():

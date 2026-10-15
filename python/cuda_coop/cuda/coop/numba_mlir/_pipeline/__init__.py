@@ -19,7 +19,9 @@ extension points:
 4. link items backed by the resolution's one compile (``_link``).
 
 Nothing cooperative runs before typing. Every Numba-CUDA-MLIR interface that
-is not public is reached through ``_bridges``. The supported surface is
+is not public is reached through ``_bridges``, and every change to
+Numba-CUDA-MLIR's own behaviour is a pinned patch in ``_ncm_patches``,
+applied only by this pipeline. The supported surface is
 ``this_block()``, ``ThreadData``, and ``load`` and ``store`` on a block
 group; any other cooperative call is a typing error, never a fallback.
 """
@@ -39,8 +41,9 @@ def _activate() -> None:
     global _activated
     if _activated:
         return
-    from . import _bridges, _lower, _resolve, _templates, _types
+    from . import _bridges, _lower, _ncm_patches, _resolve, _templates, _types
 
+    _ncm_patches.apply()
     _types.register()
     _templates.register()
     _lower.register()

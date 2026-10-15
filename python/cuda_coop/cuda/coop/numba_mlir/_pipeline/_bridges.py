@@ -27,11 +27,18 @@ MLIR dialects, lowering utilities      public re-exports
 ``external_abi_function_type``         a public external-call builder
 ``cast_value``                         a public value-conversion helper for
                                        lowering
+patch: argument-sized                  U-P-1: ``cuda.local.array`` requests a
+``cuda.local.array``                   literal for a non-literal shape
 =====================================  =======================================
 
 Importing this module fails with ``TypedPipelineUnavailableError`` when any
 of these interfaces is missing, before anything is registered, so that an
 unsupported compiler fails closed instead of compiling kernels incorrectly.
+
+Rows marked "patch" change Numba-CUDA-MLIR's own behaviour. They live in
+``_ncm_patches``, are pinned to Numba-CUDA-MLIR 0.5.4 and to the source of
+what they replace, and are applied only when the typed pipeline activates;
+a mismatch fails closed in the same way.
 """
 
 from __future__ import annotations

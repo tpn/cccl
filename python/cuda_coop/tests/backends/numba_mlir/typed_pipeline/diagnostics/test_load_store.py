@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import pytest
 from numba_cuda_mlir import cuda, types
-from numba_cuda_mlir.numba_cuda.core.errors import TypingError
 
 import cuda.coop.numba_mlir as qualified_coop
 from cuda import coop
@@ -113,24 +112,6 @@ def test_qualified_local_array_payloads_must_agree_on_the_extent():
         TypedPipelineError,
         match=r"cuda\.coop\.numba_mlir loop-carried payloads have "
         r"inconsistent items_per_thread extents",
-    ):
-        _compile(kernel, signature)
-
-
-def test_a_local_array_sized_by_a_kernel_argument_is_refused():
-    # Numba-CUDA-MLIR types cuda.local.array only with a constant shape and
-    # fails the call before coop sees it, so the message is its own. Making
-    # the argument literal needs a pass before typing, which would disable
-    # the disk cache for every kernel in the process.
-    def kernel(source, output, items_per_thread):
-        block = qualified_coop.this_block()
-        items = cuda.local.array(items_per_thread, types.float32)
-        qualified_coop.load(block, source, items)
-        qualified_coop.store(block, output, items)
-
-    signature = types.void(*f32_in_out().args, types.int64)
-    with pytest.raises(
-        TypingError, match=r"(?s)No implementation of function.*array\(int64"
     ):
         _compile(kernel, signature)
 
