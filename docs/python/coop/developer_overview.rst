@@ -1372,29 +1372,51 @@ those files are compilation inputs, not loaded kernel handles.
 Debugger Walkthrough
 --------------------
 
-Follow the tile copy through a Python debugger to see how the compiler
-recognizes a primitive, chooses its CUB specialization, and connects the
-generated device code to the kernel. These breakpoints stop in the host
-Python code doing the compilation. GPU threads execute the compiled kernel;
-the Python debugger cannot stop inside that device execution.
+Follow a tile copy, group queries, and a block reduction through a Python
+debugger to see how the compiler resolves groups, infers payloads, chooses
+CUB specializations, and connects generated device code to the kernel.
+An optional fourth stage reuses shared scratch across Load, Sum, Max, and
+Store. These breakpoints stop in the host Python code doing the compilation.
+GPU threads execute the compiled kernel; the Python debugger cannot stop
+inside that device execution.
 
 An example to debug
 ^^^^^^^^^^^^^^^^^^^
 
 Open ``docs/python/coop/debugger_walkthrough.py`` in your checkout, or
-:download:`download the example <debugger_walkthrough.py>`. It needs no
-command-line arguments:
+:download:`download the example <debugger_walkthrough.py>`. With no arguments,
+it runs the copy, groups, and Reduce stages in that order. Start with the
+copy kernel:
 
 .. literalinclude:: debugger_walkthrough.py
    :language: python
-   :start-at: # Import the kernel DSL
+   :pyobject: copy_tile
 
-By default, all 128 threads copy two integers each. ``main`` accepts an
-``items_per_thread`` argument and forwards it to both kernel launches.
-The second launch uses the same argument types, item count, and block
-shape so you can observe compilation reuse.
-Both launches check the result. Warnings about a small grid and host-array
-copies are expected for this small example.
+.. literalinclude:: debugger_walkthrough.py
+   :language: python
+   :pyobject: run_copy
+
+All 128 threads copy two integers each by default. ``--items-per-thread``
+accepts a positive integer and changes the payload size for copy, Reduce,
+and scratch. Groups always uses two blocks of 96 threads. Each stage has
+two explicit launch sites with the same argument types, item count, and
+launch shape. Both launches check their results, and the host resets outputs
+before the second launch so an old result cannot satisfy its assertion.
+Warnings about a small grid and host-array copies are expected.
+
+Run a single stage from the checkout root when following its compiler route.
+For shell commands, use the selected interpreter and the source, toolkit,
+and cache environment settings from the launch profile described below:
+
+.. code-block:: bash
+
+   python docs/python/coop/debugger_walkthrough.py --stage copy
+   python docs/python/coop/debugger_walkthrough.py --stage groups
+   python docs/python/coop/debugger_walkthrough.py --stage reduce --items-per-thread 4
+   python docs/python/coop/debugger_walkthrough.py --stage scratch
+
+The scratch stage runs only when explicitly selected. The default two-item
+payload is used in the debugger observations below.
 
 Configure VS Code
 ^^^^^^^^^^^^^^^^^
@@ -1407,45 +1429,30 @@ The Python and Python Debugger extensions must be installed in the
 environment where VS Code runs the program, including the remote side
 when using Remote SSH.
 
-Add this configuration to ``.vscode/launch.json`` in the checkout. If that
-file already exists, add the configuration to its ``configurations`` list:
+The checkout's ``.vscode/launch.json`` provides these two walkthrough profiles:
 
-.. code-block:: json
+* **cuda.coop: Debugger walkthrough** always runs this script, even when a
+  compiler source file is active in the editor.
+* **cuda.coop: Debug active Python file** runs ``${file}``, the selected
+  editor file. Keep the walkthrough active when starting this profile.
 
-   {
-     "version": "0.2.0",
-     "configurations": [
-       {
-         "name": "cuda.coop: Debug active Python file",
-         "type": "debugpy",
-         "request": "launch",
-         "program": "${file}",
-         "console": "integratedTerminal",
-         "cwd": "${workspaceFolder}",
-         "justMyCode": false,
-         "env": {
-           "PYTHONPATH": "${workspaceFolder}/python/cuda_coop",
-           "CUDA_COOP_CCCL_ROOT": "${workspaceFolder}",
-           "CUDA_COOP_DISABLE_AUTO_DSL_REGISTRATION": "0",
-           "CUDA_COOP_ENABLE_CACHE": "0",
-           "CUDA_COOP_SOURCE_DUMP_DIR": "${workspaceFolder}/build/coop-debug-sources"
-         }
-       }
-     ]
-   }
+Use the fixed walkthrough profile for this tour. To isolate a stage, add
+``"args": ["--stage", "reduce"]`` to that profile; substitute ``copy``,
+``groups``, or ``scratch`` as needed. Remove ``args`` to run the three core
+stages. Both profiles use the interpreter you selected in VS Code.
 
 ``justMyCode: false`` lets you step into the compiler and library modules.
 ``PYTHONPATH`` and ``CUDA_COOP_CCCL_ROOT`` select this checkout's Python
 sources and C++ headers. Automatic registration is enabled, and the
 provider disk cache is disabled so a fresh debug session reaches NVRTC.
-On a machine with several GPUs, add ``CUDA_VISIBLE_DEVICES`` to ``env``
-to select the device you want to use.
+Check ``CUDA_VISIBLE_DEVICES`` before starting on a machine with several
+GPUs. Set ``CUDA_HOME`` and ``CUDA_PATH`` to the same supported toolkit
+installation; the launch profiles' toolkit choice must match your machine.
+A system-default toolkit symlink may select a different installation.
 
 With the example file active, set your **first breakpoint** on
 ``from cuda import coop``, using the gutter or **F9**. Select
-``cuda.coop: Debug active Python file`` in **Run and Debug**, then press
-**F5**. Keep the example active when starting: ``${file}`` means the
-currently selected editor file.
+``cuda.coop: Debugger walkthrough`` in **Run and Debug**, then press **F5**.
 
 VS Code also has a **Python Debugger: Debug Python File** editor action.
 Use the named launch configuration for this walkthrough so the source
@@ -1641,7 +1648,7 @@ Set a breakpoint on ``if self._has_temp_storage_requirements():`` in
 preparation is complete; the original call assignments are still in the IR.
 The direct Load/Store algorithms need no shared backing, so this stop
 proceeds to block matching without allocating scratch. The optional
-transpose example below takes the backing-allocation branch here.
+scratch stage below takes the backing-allocation branch here.
 
 Set a breakpoint in the ``_prepare_call_invocables()`` method of
 ``CoopSinglePhaseRewrite`` in
@@ -1720,68 +1727,229 @@ Finish the launch and observe reuse
 Disable the compiler breakpoints and set a breakpoint on the second
 ``copy_tile[1, 128](source, destination, items_per_thread)`` in the example.
 Continue. The first launch has completed and its assertion has passed.
-Inspect ``source[:8]`` and ``destination[:8]`` in the example's ``main``
+Inspect ``source[:8]`` and ``destination[:8]`` in the example's ``run_copy``
 frame: ``source`` starts at 0, while ``destination`` contains the ``-1``
 values written immediately before this second launch.
 
 Re-enable the group-planner and NVRTC breakpoints, then continue. This
 launch uses the existing kernel specialization, so it should finish
-without those compilation stops. Both verification messages should print.
+without those compilation stops. Both copy verification messages should print.
+With no ``--stage`` argument, the groups and Reduce stages follow and trigger
+their own first compilations; select ``--stage copy`` to stop after this stage.
 
 Start a new debug session to repeat the whole tour. Disabling the provider
 disk cache does not disable in-process provider or kernel reuse. Editing
 source while paused also does not replace the function already loaded
 into that process.
 
-A second pass: shared scratch and synchronization
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Group descriptors and runtime queries
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Replace just the kernel in the example with this version. Before restarting,
-set the two additional storage breakpoints listed below:
+Start a fresh session with ``"args": ["--stage", "groups"]``. The group
+kernel combines hierarchy queries and two partitions:
+
+.. literalinclude:: debugger_walkthrough.py
+   :language: python
+   :pyobject: group_queries
+
+At the first ``group_queries[2, 96](output)`` launch in ``run_groups``,
+inspect ``output.shape``: it has ten rows and 192 columns, one column per
+thread. Reuse the launch-config breakpoint from the copy tour. This time
+``self.state.func_ir.func_id.func_qualname`` identifies ``group_queries``,
+and ``launch_config`` has ``block: (96, 1, 1)`` and ``grid: (2, 1, 1)``.
+
+In ``_compiler/_group_planner.py``, find ``_lower_group_method()``. Stop on
+``key = (group.semantic_key, operation, dtype, level)``, after query dtype
+and hierarchy normalization. Inspect:
 
 .. code-block:: python
 
-   @cuda.jit
-   def copy_tile(source, destination, items_per_thread):
-       block = coop.this_block()
-       items = coop.ThreadData(items_per_thread)
-       scratch = coop.TempStorage(auto_sync=True)
-       coop.load(
-           block, source, items, algorithm="transpose", temp_storage=scratch
-       )
-       coop.store(
-           block, destination, items, algorithm="transpose", temp_storage=scratch
-       )
+   method, operation, dtype, level
+   group.kind
+   group.hierarchy
+   group.mapping
+   group.semantic_key
 
-The expected result stays the same. At the Load/Store plan breakpoint,
-inspect ``plan.temp_storage`` and ``plan.synchronization`` again. The
-transpose algorithms exchange data through shared memory and require a
-block barrier before that scratch can be reused.
+Continue through the methods to compare the resolved descriptors. For
+``rank_as``, ``method`` retains that spelling while ``operation`` is
+``"rank"`` and ``dtype`` is ``int64``. The typed block rank uses level
+``"grid"``. A conditional breakpoint such as ``method == "rank_as"``
+isolates that case; remove the condition to inspect partitions and syncs.
 
-At the invocable breakpoint, the storage ABI is now ``LEADING_POINTER``, and
+``group`` is a compiler descriptor with launch dimensions and mapping
+information. It is not a live GPU thread's group object. Step into
+``make_group_method_invocable()`` to see how the descriptor is embedded in
+a generated device helper. Query results become runtime scalars returned
+by those helpers, and the kernel stores them in ``output``.
+
+The eight-lane groups partition each physical warp. The two-warp group
+contains block threads 0 through 63; the third warp is excluded because
+``exhaustive=False`` permits an incomplete final group. Only members query
+its rank. All synchronization appears before the membership branch so its
+participating threads reach it together.
+
+After the first launch and assertion, inspect ``expected`` in ``run_groups``.
+The host builds it independently with NumPy. For global column index ``i``,
+the ten expected rows are:
+
+.. list-table:: Expected group-query rows
+   :header-rows: 1
+   :widths: 10 55 35
+
+   * - Row
+     - Query
+     - Expected value
+   * - 0
+     - Thread rank within the block
+     - ``i % 96``
+   * - 1
+     - Thread rank within the physical warp
+     - ``i % 32``
+   * - 2
+     - Block rank within the grid, queried as ``int64``
+     - ``i // 96``
+   * - 3
+     - Threads per block, queried as ``int64``
+     - ``96``
+   * - 4
+     - Thread rank within the grid
+     - ``i``
+   * - 5
+     - Threads in the grid
+     - ``192``
+   * - 6
+     - Thread rank within an eight-lane group
+     - ``i % 8``
+   * - 7
+     - Threads in that eight-lane group
+     - ``8``
+   * - 8
+     - Membership in a complete two-warp group
+     - ``(i % 96) < 64``
+   * - 9
+     - Rank within the two-warp group, or the nonmember sentinel
+     - ``i % 96`` for members; ``-1`` otherwise
+
+At the second launch, ``output`` has been reset. Re-enable the planner
+breakpoint and continue to verify both the second result and compilation
+reuse, as in the copy stage.
+
+Reduce: participation, payload, and scalar ownership
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Start a fresh session with ``"args": ["--stage", "reduce"]``. This kernel
+uses 64 threads, each contributing ``items_per_thread`` consecutive values:
+
+.. literalinclude:: debugger_walkthrough.py
+   :language: python
+   :pyobject: block_sum
+
+``ThreadData`` gets its element type from assignments of ``int32`` source
+values. Every block member calls ``coop.sum``. Only consumption of its
+scalar result is guarded by rank zero; placing the collective itself inside
+that guard would violate its participation requirement. ``run_reduce``
+compares the root's output against NumPy's sum on both launches.
+
+Set two breakpoints before the first ``block_sum[1, 64]`` launch:
+
+* In ``_core/group/reduce.py``, relative to ``cuda/coop/``, stop at
+  ``return ResultContract(...)`` inside ``_result_contract()``. Inspect
+  ``operation.primitive``. The returned contract describes one scalar,
+  visible and owned at group root rank zero.
+* In ``numba_mlir/_compiler/_group_reduce.py``, stop on
+  ``semantics = plan.call.operation`` inside ``_lower_reduce()``. The
+  preceding planning call has completed, so evaluate:
+
+  .. code-block:: python
+
+     plan.call.operation.primitive
+     plan.target
+     plan.participation
+     plan.topology
+     plan.result.primary
+
+The plan targets ``CUB_BLOCK`` with exact block dimensions ``(64, 1, 1)``.
+The primitive has dtype ``int32``, array input, and two items per thread;
+the topology describes one 64-thread group. ``plan.result.primary`` has
+``GROUP_ROOT`` visibility and ownership, ``SCALAR`` operand kind, one item,
+and root rank zero. The input extent and result extent serve different
+purposes: two values per thread enter the reduction, and one scalar is
+defined at its root.
+
+For the payload rewrite, stop in ``_compiler/_rewrite_reduce.py`` at
+``inference.infer_kwarg("dtype", dtype)`` inside ``infer_reduce_payload()``.
+Inspect ``array_specification``, ``dtype``, ``items_per_thread``, and
+``inference.lowering_plan.result.primary``. Step through the remaining
+``infer_kwarg`` calls and ``context.record_thread_data_dtype(value, dtype)``.
+They reconcile the provider's array form and extent with the plan and
+record the inferred type for payload allocation. The result remains scalar.
+
+Continue through the provider, NVRTC, and link stops from the copy tour.
+At ``prepare_ltoir_bundle()``, look for ``cub::BlockReduce`` and ``Sum`` in
+``src`` and compare its dtype and dimensions with the Reduce plan.
+``Algorithm.codegen_method()`` exposes the external function signature
+and provider link files. ``new_block.dump()`` after rewriting shows the
+typed per-thread array and the scalar provider call.
+
+Stop on the second launch in ``run_reduce``. The first assertion has passed
+and ``output`` is reset. Re-enable the planner and NVRTC breakpoints before
+continuing: the identical second launch should pass without recompiling.
+
+Optional stage: shared scratch and synchronization
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Start a fresh session with ``"args": ["--stage", "scratch"]``. The supplied
+kernel processes two tiles using one ``TempStorage(auto_sync=True)``:
+
+.. literalinclude:: debugger_walkthrough.py
+   :language: python
+   :pyobject: scratch_reuse
+
+For each tile, all 64 threads execute transpose Load, Sum, Max, and
+transpose Store. Only the block root stores the two scalar results.
+``run_scratch`` checks both tiles' sums and maxima against NumPy and checks
+that Store preserved every input value. Both launches check all three
+outputs.
+
+At the Load/Store and Reduce plan breakpoints, inspect ``plan.temp_storage``
+and ``plan.synchronization``. These operations reuse the caller's shared
+scratch. The transpose algorithms exchange data through shared memory;
+automatic synchronization supplies the required storage-reuse barriers.
+
+At the invocable breakpoint, the storage ABI is ``LEADING_POINTER``, and
 the temporary-storage size is nonzero. The compiled provider supplies its
 size and alignment; avoid hard-coding the numbers from one toolkit.
 
-The additional stops are in ``_compiler/_rewrite_storage.py``. Set both
-before starting this pass. ``begin_rewrite()`` stages the allocation after
-function preparation and before any block is matched or emitted.
+Set these additional stops before starting the stage. They distinguish
+layout decisions from allocation and barrier emission:
 
+* In ``_compiler/_rewrite_provenance.py``, stop at the final
+  ``return required_size, required_alignment, slices_by_call_id`` in
+  ``_layout_temp_storage_uses()``. Inspect those values and ``sharing``.
+  The compatible block operations share a region sized for their provider
+  requirements; each call retains its own slice description.
+* In ``_compiler/_rewrite_storage.py``, stop on ``cached =
+  self._temp_storage_global_plan`` in ``_ensure_temp_storage_global_plan()``.
+  Follow the uncached path through alignment and total-size calculation.
+  ``begin_rewrite()`` later stages the allocation before any block is emitted.
 * In ``_emit_temp_storage_backing()``, stop on
   ``alloc_size = 0 if plan.uses_dynamic_smem else int(plan.total_size)``.
   Inspect ``plan.total_size``, ``plan.max_alignment``, and
   ``plan.uses_dynamic_smem``. The rewrite emits shared storage satisfying
-  the provider requirements in the entry block. Both uses of ``scratch``
+  the provider requirements in the entry block. All uses of ``scratch``
   refer to this planned allocation, which precedes every scratch view.
 * In ``_emit_temp_storage_auto_sync()``, stop on ``sync_args = []``.
   Inspect ``synchronization_scope`` and ``sync_attr``. For this block
   example they select a block barrier, emitted as ``syncthreads``.
 
-Compare ``new_block.dump()`` at the end of ``apply()`` with the direct
-version. It now includes the shared allocation, scratch arguments, and
+Compare ``new_block.dump()`` at the end of ``apply()`` with the copy stage.
+It now includes the shared allocation, scratch arguments, and
 synchronization in addition to the per-thread ``items`` array.
-``TempStorage`` describes shared workspace for the primitive;
+``TempStorage`` describes shared workspace for the primitives;
 ``ThreadData`` holds each thread's payload. Seeing both in the rewritten
-IR makes their different lifetimes and uses concrete.
+IR makes their different lifetimes and uses concrete. At the second
+launch in ``run_scratch``, inspect the reset outputs, then continue through
+the repeated assertions without the first launch's compiler stops.
 
 If a breakpoint does not stop
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
