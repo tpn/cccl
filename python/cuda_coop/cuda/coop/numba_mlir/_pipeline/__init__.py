@@ -41,9 +41,19 @@ def _activate() -> None:
     global _activated
     if _activated:
         return
-    from . import _bridges, _lower, _ncm_patches, _resolve, _templates, _types
+    from . import (
+        _bridges,
+        _lower,
+        _ncm_patches,
+        _payload_rules,
+        _resolve,
+        _templates,
+        _types,
+        _typing_rules,
+    )
 
-    _ncm_patches.apply()
+    _ncm_patches.apply(_typing_rules.ENGINE)
+    _payload_rules.register()
     _types.register()
     _templates.register()
     _lower.register()

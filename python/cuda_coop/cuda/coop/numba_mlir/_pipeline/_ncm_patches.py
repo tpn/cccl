@@ -99,7 +99,9 @@ def check(patch: Patch) -> None:
         stale = [p for p in patch.pins if not _pinned(p)]
         if not stale:
             return
-        changed = f"{stale[0].owner.__qualname__}.{stale[0].name} has changed"
+        owner = stale[0].owner
+        owner = getattr(owner, "__qualname__", owner.__name__)
+        changed = f"{owner}.{stale[0].name} has changed"
     raise nb.TypedPipelineUnavailableError(
         f"The cuda.coop typed pipeline's {patch.name!r} patch was written "
         f"against Numba-CUDA-MLIR {NCM_VERSION}, but {changed}. The patch is "
@@ -330,14 +332,19 @@ _ABSENT = object()
 _replaced: list[tuple[type, str, Any]] = []
 
 
-def apply() -> None:
-    """Check every patch, then apply them all; later calls do nothing."""
+def apply(*extra: Patch) -> None:
+    """Check every patch, then apply them all; later calls do nothing.
+
+    ``extra`` are patches defined outside this module, applied after
+    ``PATCHES``.
+    """
 
     if _replaced:
         return
-    for patch in PATCHES:
+    patches = PATCHES + extra
+    for patch in patches:
         check(patch)
-    for patch in PATCHES:
+    for patch in patches:
         for owner, name, value in patch.build():
             _replaced.append((owner, name, vars(owner).get(name, _ABSENT)))
             setattr(owner, name, value)
