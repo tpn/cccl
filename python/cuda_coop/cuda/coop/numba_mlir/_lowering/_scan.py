@@ -6,7 +6,7 @@
 
 These factories normalize selectors, describe operators and optional seeds,
 and adapt the shared block or Warp specialization to Numba's calling
-convention. The resulting invocable supplies provider code and storage
+convention. The resulting specialization supplies provider code and storage
 metadata to kernel compilation. Registration defines its storage argument
 and execution scope for the compiler rewrite.
 """
@@ -50,8 +50,8 @@ from .._compiler._parameters import (
 from .._semantic import _normalize_numba_callable, _numba_semantic_token
 from .._types import (
     BoundedInteger,
-    make_invocable_from_specialization,
     numba_type_to_wrapper,
+    prepare_specialization,
 )
 from ._core import NumbaMlirCoreAdapter, _optional_binding
 
@@ -310,7 +310,7 @@ def _block_scan(
 
     The factory identity selects the payload calling convention and registry
     metadata. Materialization resolves operator types and compiles callback
-    LTO. Invocable construction supplies the provider wrapper and storage
+    LTO. Specialization construction supplies the provider wrapper and storage
     metadata; a requested aggregate remains a separate output reference.
     """
 
@@ -394,7 +394,7 @@ def _block_scan(
         **_provider_metadata(provider_factory, namespace="block"),
         extra_type_definitions=(numba_type_to_wrapper(dtype),),
     )
-    return make_invocable_from_specialization(specialization)
+    return prepare_specialization(specialization)
 
 
 def block_scan_scalar(**kwargs: Any) -> Any:
@@ -421,7 +421,7 @@ def warp_scan(
 ) -> Any:
     """Build a scalar WarpScan provider for a physical or logical warp.
 
-    Pass the lane-group width and enclosing block shape to the invocable so
+    Pass the lane-group width and enclosing block shape to the specialization so
     it can select the correct storage slice and synchronization mask. Runtime
     ``valid_items`` values use a bounded integer argument: the wrapper checks
     that the value is between 1 and the group width before narrowing the
@@ -478,7 +478,7 @@ def warp_scan(
         **_provider_metadata(warp_scan, namespace="warp"),
         extra_type_definitions=(numba_type_to_wrapper(dtype),),
     )
-    return make_invocable_from_specialization(
+    return prepare_specialization(
         specialization,
         logical_warp_threads=threads_in_warp,
         block_threads=block_dim,

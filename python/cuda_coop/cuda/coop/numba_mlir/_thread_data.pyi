@@ -36,8 +36,6 @@ class _SharedMemory(Protocol):
     ) -> Any:
         """Allocate shared compiler storage."""
 
-def _normalize_thread_data_alignment(alignment: int | None) -> int | None: ...
-
 local: _LocalMemory
 
 shared: _SharedMemory
@@ -62,7 +60,6 @@ def ThreadData(
 
 __all__ = [
     "ThreadData",
-    "_normalize_thread_data_alignment",
     "local",
     "shared",
 ]

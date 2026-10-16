@@ -2,11 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-"""Build and register Numba invocables for the core block neighbor wrappers.
+"""Build Numba specializations for the core block neighbor wrappers.
 
 Factory metadata supplies the scratch-pointer ABI and block synchronization
 scope. The factories specialize wrappers and adapt device callbacks; kernel
-execution happens later through the resulting invocables.
+execution happens later through the resulting specializations.
 """
 
 from cuda.coop._core import (
@@ -31,7 +31,7 @@ from .._compiler._parameters import (
     normalize_dim_param,
 )
 from .._semantic import _normalize_numba_callable, _numba_semantic_token
-from .._types import make_invocable_from_specialization
+from .._types import prepare_specialization
 from ._core import NumbaMlirCoreAdapter
 
 
@@ -82,7 +82,7 @@ def _make_provider(operation, *, both=False):
 
         The core factory chooses the neighbor overload and scratch layout.
         Attach Numba operator types and storage metadata before creating the
-        invocable that the kernel will call.
+        specialization that the kernel will call.
         """
 
         dtype = _validate_common_numeric_dtype(
@@ -110,7 +110,7 @@ def _make_provider(operation, *, both=False):
             execution_scope=metadata.execution_scope,
             synchronization_scope=metadata.synchronization_scope,
         )
-        return make_invocable_from_specialization(specialization)
+        return prepare_specialization(specialization)
 
     factory_name = operation + ("_both" if both else "")
     provider.__name__ = "block_" + factory_name

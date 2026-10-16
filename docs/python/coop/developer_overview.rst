@@ -1265,19 +1265,20 @@ from ``pyproject.toml``; it does not change the wheel or register hooks in a
 running process.
 
 ``_compiler/_activation.py`` checks the runtime and compiler compatibility,
-imports the planner, and registers ``CoopWholeFunctionPlanner`` as its final
-step. There is one compiler hook to register, so activation needs no
-registry snapshots or rollback. ``_compiler/_numba_mlir_compat.py`` checks
-the installed compiler version when the Numba backend is activated, before
+activates the typed pipeline, and registers its typing, call-resolution,
+and lowering hooks. The pipeline also checks the source digests of its
+Numba-CUDA-MLIR patches before applying them.
+``_compiler/_numba_mlir_compat.py`` checks the installed compiler version
+when the Numba backend is activated, before
 importing its compiler integration. The Numba extras declare
-``numba-cuda-mlir>=0.5.0,<0.6`` for package installers; the activation check
+``numba-cuda-mlir==0.5.4`` for package installers; the activation check
 also covers applications that install bare ``cuda-coop`` and manage compiler
 dependencies separately. An unused Numba installation has no effect on other
 backends. Once the version check succeeds, integration modules import the
 required compiler APIs directly. Missing launch metadata and other
-compilation errors retain their specific diagnostics. A new compiler series
-needs its integration checked before the supported range changes. The
-compatibility module documents the reasons for this division in detail.
+compilation errors retain their specific diagnostics. A different compiler
+version needs its integration and patch source checked before the version pin
+changes. The compatibility module documents this division in detail.
 
 The rewrite can collect compatible CUB specializations and compile them
 in a single NVRTC source bundle. This reduces repeated header parsing and

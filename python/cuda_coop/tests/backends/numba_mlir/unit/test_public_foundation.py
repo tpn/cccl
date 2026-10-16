@@ -102,7 +102,7 @@ def test_public_exports_are_only_the_supported_group_families():
 
     loaded = set(sys.modules)
     assert "cuda.coop.numba_mlir._group._load_store" in loaded
-    assert "cuda.coop.numba_mlir._compiler._rewrite" in loaded
+    assert "cuda.coop.numba_mlir._pipeline._resolve" in loaded
     assert set(_EXCLUDED_BACKEND_MODULES).isdisjoint(loaded)
     assert (
         importlib.import_module("cuda.coop.numba_mlir._lowering").__all__ == ()
@@ -355,14 +355,14 @@ def test_group_markers_use_exact_callable_identity(operation):
 @pytest.mark.parametrize("operation", ("load", "store"))
 def test_lowering_factories_use_exact_callable_identity(operation):
     from cuda.coop._core import SynchronizationScope
-    from cuda.coop.numba_mlir import _lowering
     from cuda.coop.numba_mlir._compiler._operations import (
         FactoryOperation,
         StorageABI,
         factory_operation,
     )
+    from cuda.coop.numba_mlir._lowering import _load_store
 
-    factory = getattr(_lowering, operation)
+    factory = getattr(_load_store, operation)
     assert factory_operation(factory) == FactoryOperation(
         operation=operation,
         namespace="block",

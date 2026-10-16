@@ -31,9 +31,7 @@ _K = TypeVar("_K", bound=CommonNumericScalar)
 _V = TypeVar("_V", bound=CommonNumericScalar)
 
 
-@group_operation(
-    "topk_min_keys", family_module="cuda.coop.numba_mlir._compiler._group_topk"
-)
+@group_operation("topk_min_keys")
 def topk_min_keys(
     group: BlockGroup,
     keys: CommonThreadDataLike[_K] | numpy.ndarray,
@@ -116,9 +114,7 @@ def topk_min_keys(
     )
 
 
-@group_operation(
-    "topk_min_pairs", family_module="cuda.coop.numba_mlir._compiler._group_topk"
-)
+@group_operation("topk_min_pairs")
 def topk_min_pairs(
     group: BlockGroup,
     keys: CommonThreadDataLike[_K] | numpy.ndarray,
@@ -208,9 +204,7 @@ def topk_min_pairs(
     )
 
 
-@group_operation(
-    "topk_max_keys", family_module="cuda.coop.numba_mlir._compiler._group_topk"
-)
+@group_operation("topk_max_keys")
 def topk_max_keys(
     group: BlockGroup,
     keys: CommonThreadDataLike[_K] | numpy.ndarray,
@@ -293,9 +287,7 @@ def topk_max_keys(
     )
 
 
-@group_operation(
-    "topk_max_pairs", family_module="cuda.coop.numba_mlir._compiler._group_topk"
-)
+@group_operation("topk_max_pairs")
 def topk_max_pairs(
     group: BlockGroup,
     keys: CommonThreadDataLike[_K] | numpy.ndarray,

@@ -17,7 +17,7 @@ import math
 import operator
 from collections import namedtuple
 from numbers import Real
-from typing import Any, cast
+from typing import cast
 
 import numba_cuda_mlir.numba_cuda.types as numba_types
 import numpy as np
@@ -195,105 +195,6 @@ def _validate_common_numeric_dtype(
         parameter=parameter,
     )
     return dtype
-
-
-def _python_scalar_dtype(value: object) -> numba_types.Type | None:
-    """Infer an ordinary or NumPy scalar's dtype through NumPy.
-
-    Preserve the scalar's inferred width, unlike the 32-bit defaults for
-    Python type objects in ``normalize_dtype_param``. Return ``None`` for
-    unsupported values or dtypes.
-    """
-
-    if type(value) not in {bool, int, float, complex} and not isinstance(
-        value, np.generic
-    ):
-        return None
-    try:
-        return normalize_dtype_param(np.asarray(value).dtype)
-    except (TypeError, ValueError):
-        return None
-
-
-def _scalar_cast_dtype(function: Any) -> numba_types.Type | None:
-    """Recognize the scalar dtype requested by a cast callable.
-
-    Accept compiler type objects and scalar types recognized by ``np.dtype``,
-    such as ``np.float32``. Return ``None`` for structured, subarray, or
-    unsupported dtypes.
-    """
-
-    if isinstance(function, numba_types.Type):
-        try:
-            return normalize_dtype_param(function)
-        except (TypeError, ValueError):
-            return None
-    try:
-        np_dtype = np.dtype(function)
-    except (TypeError, ValueError):
-        return None
-    if np_dtype.subdtype is not None or np_dtype.fields is not None:
-        return None
-    try:
-        return normalize_dtype_param(np_dtype)
-    except (TypeError, ValueError):
-        return None
-
-
-def _scalar_operator_result_dtype(
-    function: object, *operand_dtypes: object
-) -> numba_types.Type | None:
-    """Infer a scalar expression's result dtype using compiler rules.
-
-    Payload inference uses this probe before the authoritative typing pass.
-    Resolve the operator through the active Numba-CUDA-MLIR typing context so
-    integer promotion and result widths follow compiler rules rather than
-    Python evaluation. Initialize that context lazily when a usable set of
-    operand dtypes is available.
-
-    All resolution failures become ``None``. This intentionally leaves
-    unsupported expressions for later typing diagnostics rather than making a
-    best-effort provenance query reject the kernel.
-
-    Parameters
-    ----------
-    function : callable or None
-        Operator or scalar function whose result is being inferred.
-    *operand_dtypes : object
-        Operand dtypes accepted by ``normalize_dtype_param``. Inference
-        requires a known dtype for every operand; ``None`` prevents it.
-
-    Returns
-    -------
-    numba_types.Type or None
-        Normalized result dtype, or ``None`` for missing inputs, no typing
-        signature, or an exception during normalization or resolution.
-    """
-
-    if (
-        function is None
-        or not operand_dtypes
-        or any(dtype is None for dtype in operand_dtypes)
-    ):
-        return None
-    try:
-        normalized = tuple(
-            normalize_dtype_param(dtype) for dtype in operand_dtypes
-        )
-        from numba_cuda_mlir.descriptor import mlir_target
-
-        mlir_target.ensure_initialized()
-        signature = mlir_target.typing_context.resolve_function_type(
-            function,
-            normalized,
-            {},
-        )
-        if signature is None:
-            return None
-        return normalize_dtype_param(signature.return_type)
-    except Exception:  # noqa: BLE001 - Later typing reports failures.
-        # This is best-effort provenance, not the authoritative typing pass.
-        return None
 
 
 def _validate_runtime_integer_dtype(
@@ -507,9 +408,6 @@ def make_typed_cpp_literal(value, dtype):
 
 
 __all__ = [
-    "_python_scalar_dtype",
-    "_scalar_cast_dtype",
-    "_scalar_operator_result_dtype",
     "_validate_common_numeric_dtype",
     "_validate_runtime_integer_dtype",
     "_validate_static_oob_default",

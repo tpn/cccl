@@ -5,13 +5,12 @@
 """Activate the Numba backend after checking its compiler runtime.
 
 Load the compiler package, check its supported version, and import the CUDA
-compiler interface before registering ``CoopWholeFunctionPlanner``. The
-registration entry point acquires ``_activation_lock`` itself and imports all
-planner dependencies before registering the planner as its final step. Failed
-imports can therefore be retried without leaving a partially registered pass.
+compiler interface before activating the typed pipeline. The registration
+entry point acquires ``_activation_lock`` and delegates hook registration to
+the pipeline's idempotent activation entry point.
 
 Runtime-load and version diagnostics include installation details, and wrapped
-import failures retain their original causes. Planner-dependency import errors
+import failures retain their original causes. Pipeline-dependency import errors
 propagate unchanged. Explicit activation raises these failures; automatic
 backend discovery reports them as warnings.
 """
@@ -186,14 +185,11 @@ def _require_runtime() -> ModuleType:
 
 
 def _initialize_runtime_hooks() -> None:
-    """Register the planner after all compiler support has loaded.
+    """Activate the typed pipeline after validating the compiler runtime.
 
     Serialize this backend's activation attempts and require a supported
-    runtime before importing its implementation. Those imports do not register
-    planner or rewrite hooks. Registering the single planner as the final step
-    therefore keeps failed imports from leaving partially activated
-    cooperative hooks; a later attempt can reuse successfully loaded modules.
-    The runtime deduplicates repeated registration of the same planner class.
+    runtime before importing its implementation. The pipeline checks its
+    compiler patches before registering typing, resolution and lowering hooks.
 
     Raises
     ------
@@ -207,12 +203,7 @@ def _initialize_runtime_hooks() -> None:
 
     with _activation_lock:
         _require_runtime()
-        planner_module = importlib.import_module(
-            f"{_BACKEND_PACKAGE}._compiler._planner"
-        )
-        from numba_cuda_mlir.extending import register_planner
-
-        register_planner(planner_module.CoopWholeFunctionPlanner)
+        importlib.import_module(f"{_BACKEND_PACKAGE}._pipeline")._activate()
 
 
 __all__ = [

@@ -61,12 +61,8 @@ is a compilation/usage error, not evidence of an old compiler.
 
 Keep the range below aligned with both Numba extras in ``pyproject.toml``. Use
 packaging's version semantics, including local and development versions,
-instead of a string prefix check. Already-installed prereleases within the
-range are accepted; prereleases below the minimum or at the excluded next
-series remain outside it. A missing or unparsable version cannot establish
-support and is reported explicitly. Compiler API loading, planner
-registration, and any registration failure handling belong to the activation
-code, rather than to a registry of capabilities in this module.
+instead of a string prefix check. The typed pipeline additionally verifies
+its exact compiler version and patch source digests before activation.
 """
 
 from __future__ import annotations
@@ -74,7 +70,7 @@ from __future__ import annotations
 import importlib.metadata
 from types import ModuleType
 
-_REQUIRED_RUNTIME_VERSION = ">=0.5.0,<0.6"
+_REQUIRED_RUNTIME_VERSION = "==0.5.4"
 _RUNTIME_INSTALL_HINT = (
     "python -m pip install --upgrade 'cuda-coop[numba-cuda-mlir-cu12]' "
     "for CUDA 12 or 'cuda-coop[numba-cuda-mlir-cu13]' for CUDA 13"
@@ -168,8 +164,8 @@ def _require_numba_mlir_version(runtime: ModuleType) -> None:
     Activation calls this after importing the top-level compiler package and
     before loading its CUDA integration. Import ``packaging`` here so a bare
     ``cuda-coop`` installation can use the common API without that dependency.
-    The declared range accepts installed prereleases within its bounds; it
-    does not admit versions below the minimum or in the excluded next series.
+    The typed pipeline pins its compiler patches to version 0.5.4 and checks
+    their source digests before applying them.
 
     Parameters
     ----------

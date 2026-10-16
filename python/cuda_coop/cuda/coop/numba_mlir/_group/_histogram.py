@@ -31,9 +31,7 @@ _Counter = TypeVar(
 )
 
 
-@group_operation(
-    "histogram", family_module="cuda.coop.numba_mlir._compiler._group_histogram"
-)
+@group_operation("histogram")
 def histogram(
     group: BlockGroup,
     samples: CommonThreadDataLike[

@@ -16,9 +16,6 @@ from numba_cuda_mlir import cuda, types
 from numba_cuda_mlir.numba_cuda.core.errors import TypingError
 
 import cuda.coop.numba_mlir as coop
-from cuda.coop.numba_mlir._compiler._rewrite_support import (
-    CoopSinglePhaseRewriteError,
-)
 
 pytestmark = [pytest.mark.backend_numba_mlir, pytest.mark.compile]
 
@@ -59,7 +56,7 @@ def test_reserve_rejects_invalid_element_count(count):
         output[0] = values[0]
 
     with pytest.raises(
-        (CoopSinglePhaseRewriteError, TypingError),
+        TypingError,
         match="reserve num_elems must be a compile-time positive integer",
     ):
         _compile(kernel, types.int32[::1])
@@ -73,7 +70,7 @@ def test_reserve_rejects_runtime_element_count():
         output[0] = values[0]
 
     with pytest.raises(
-        (CoopSinglePhaseRewriteError, TypingError),
+        TypingError,
         match="reserve num_elems must be a compile-time positive integer",
     ):
         _compile(kernel, types.int32[::1])
@@ -88,7 +85,7 @@ def test_reserve_rejects_invalid_alignment(alignment):
         output[0] = values[0]
 
     with pytest.raises(
-        (CoopSinglePhaseRewriteError, TypingError),
+        TypingError,
         match="reserve alignment must be a compile-time positive power of 2",
     ):
         _compile(kernel, types.int32[::1])
@@ -103,7 +100,7 @@ def test_reserve_capacity_includes_alignment_padding():
         output[0] = prefix[0] + values[0]
 
     with pytest.raises(
-        CoopSinglePhaseRewriteError,
+        TypingError,
         match="TempStorage size_in_bytes is smaller than required",
     ):
         _compile(kernel, types.float64[::1])
@@ -140,7 +137,7 @@ def test_reserve_rejects_auto_sync_for_its_descriptor(access):
         output[cuda.threadIdx.x] = values[cuda.threadIdx.x]
 
     with pytest.raises(
-        CoopSinglePhaseRewriteError,
+        TypingError,
         match="TempStorage.reserve requires auto_sync=False",
     ):
         _compile(kernel, types.int32[::1])
@@ -157,7 +154,7 @@ def test_reserve_rejects_unsupported_dtype(dtype):
         output[0] = values[0]
 
     with pytest.raises(
-        (CoopSinglePhaseRewriteError, TypingError),
+        TypingError,
         match=(
             "reserve dtype must be a compile-time fixed-size "
             "integer, floating-point, or complex dtype"

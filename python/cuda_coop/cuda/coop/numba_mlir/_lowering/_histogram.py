@@ -22,7 +22,7 @@ from .._compiler._operations import (
     register_factory,
 )
 from .._compiler._parameters import normalize_dim_param, normalize_dtype_param
-from .._types import make_invocable_from_specialization
+from .._types import prepare_specialization
 from ._core import NumbaMlirCoreAdapter
 
 
@@ -44,7 +44,7 @@ def histogram(
     when the sort algorithm reorders its working items.
 
     Materialize that specialization with registered block synchronization and
-    scratch metadata. Return an invocable that writes the supplied counter
+    scratch metadata. Return a specialization that writes the supplied counter
     array; the public rewrite allocates that array with bins_per_thread slots.
     """
 
@@ -70,7 +70,7 @@ def histogram(
         execution_scope=metadata.execution_scope,
         synchronization_scope=metadata.synchronization_scope,
     )
-    return make_invocable_from_specialization(specialization)
+    return prepare_specialization(specialization)
 
 
 register_factory(

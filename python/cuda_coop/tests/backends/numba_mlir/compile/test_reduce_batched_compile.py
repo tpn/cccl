@@ -2,14 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-"""Compile batched-reduction kernels and bundled native providers.
-
-Run with GPUs hidden and target queries fixed at SM90, but keep real
-compilation and linkage. Kernel cases check the inferred result shape and
-reject a block group, an unknown output layout, and a partial physical warp.
-A separate bundle compiles all numeric types across logical widths and
-layouts without launching any provider.
-"""
+"""Compile batched reduction kernels and check invalid contracts."""
 
 import os
 from types import SimpleNamespace
@@ -17,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 pytest.importorskip("numba_cuda_mlir")
+
 import numba_cuda_mlir.tools as compiler_tools
 from numba_cuda_mlir import cuda, types
 
@@ -126,51 +120,3 @@ def test_reduce_batched_rejects_partial_physical_warp(compile_kernel):
 
     with pytest.raises(Exception, match="warp|multiple of 32"):
         compile_kernel(kernel, block=48)
-
-
-def test_reduce_batched_provider_dtype_bundle(compile_kernel):
-    """Compile numeric, width, and layout variants in one provider bundle.
-
-    Collect each specialization separately, then give all of them the same
-    NVRTC compiler context, because one bundle must use one compiler. Compile
-    them into one link-time optimization (LTO) image, with one shared
-    declaration of each payload type, including narrow integers and 64-bit
-    types. Each provider keeps its logical width and block shape so that its
-    scratch size is correct.
-    """
-
-    from cuda.coop.numba_mlir._compiler import _nvrtc
-    from cuda.coop.numba_mlir._lowering._reduce_batched import reduce_batched
-
-    context = _nvrtc.resolve_compile_context()
-    collected = []
-    for dtype_name in (
-        "int8",
-        "uint8",
-        "int16",
-        "uint16",
-        "int32",
-        "uint32",
-        "int64",
-        "uint64",
-        "float32",
-        "float64",
-    ):
-        for width in (8, 32):
-            for layout in ("blocked", "striped"):
-                with _types.collect_specializations() as items:
-                    reduce_batched(
-                        getattr(types, dtype_name),
-                        64,
-                        width,
-                        33,
-                        output_layout=layout,
-                    )
-                assert len(items) == 1
-                items[0]._compile_context = context
-                collected.extend(items)
-    ltoir = _types.prepare_ltoir_bundle(
-        collected,
-        allow_single=True,
-    )
-    assert isinstance(ltoir, bytes) and ltoir

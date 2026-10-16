@@ -53,10 +53,7 @@ _KeyT = TypeVar(
 _RankKeyT = TypeVar("_RankKeyT", bound=_IntegerKey)
 
 
-@group_operation(
-    "radix_sort_keys",
-    family_module="cuda.coop.numba_mlir._compiler._group_radix_sort",
-)
+@group_operation("radix_sort_keys")
 def radix_sort_keys(
     group: BlockGroup,
     keys: CommonThreadDataLike[_KeyT] | _KeyT | numpy.ndarray,
@@ -133,10 +130,7 @@ def radix_sort_keys(
     )
 
 
-@group_operation(
-    "radix_sort_pairs",
-    family_module="cuda.coop.numba_mlir._compiler._group_radix_sort",
-)
+@group_operation("radix_sort_pairs")
 def radix_sort_pairs(
     group: BlockGroup,
     keys: CommonThreadDataLike[_KeyT] | _KeyT | numpy.ndarray,
@@ -215,10 +209,7 @@ def radix_sort_pairs(
     )
 
 
-@group_operation(
-    "radix_rank_keys",
-    family_module="cuda.coop.numba_mlir._compiler._group_radix_sort",
-)
+@group_operation("radix_rank_keys")
 def radix_rank_keys(
     group: BlockGroup,
     keys: CommonThreadDataLike[_RankKeyT] | _RankKeyT | numpy.ndarray,

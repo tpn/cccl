@@ -38,10 +38,7 @@ _ValueT = TypeVar("_ValueT", bound=CommonNumericScalar)
 _KeyT = TypeVar("_KeyT", bound=CommonNumericScalar)
 
 
-@group_operation(
-    "merge_sort_keys",
-    family_module="cuda.coop.numba_mlir._compiler._group_merge_sort",
-)
+@group_operation("merge_sort_keys")
 def merge_sort_keys(
     group: BlockGroup | WarpGroup,
     keys: CommonThreadDataLike[_KeyT] | numpy.ndarray,
@@ -148,10 +145,7 @@ def merge_sort_keys(
     )
 
 
-@group_operation(
-    "merge_sort_pairs",
-    family_module="cuda.coop.numba_mlir._compiler._group_merge_sort",
-)
+@group_operation("merge_sort_pairs")
 def merge_sort_pairs(
     group: BlockGroup | WarpGroup,
     keys: CommonThreadDataLike[_KeyT] | numpy.ndarray,

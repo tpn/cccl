@@ -31,10 +31,7 @@ _FlagT = TypeVar("_FlagT", bound=IntegralScalar)
 _ItemT = TypeVar("_ItemT", bound=CommonNumericScalar)
 
 
-@group_operation(
-    "exchange",
-    family_module="cuda.coop.numba_mlir._compiler._group_exchange",
-)
+@group_operation("exchange")
 def exchange(
     group: BlockGroup | WarpGroup,
     value: CommonThreadDataLike[_ItemT] | numpy.ndarray,

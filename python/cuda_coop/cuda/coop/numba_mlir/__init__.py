@@ -2,18 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-"""Expose cooperative operations and activate their Numba-CUDA-MLIR planner.
+"""Expose cooperative operations and activate the Numba-CUDA-MLIR pipeline.
 
 Import this qualified API on the host before compiling kernels. Importing it
-loads the supported compiler runtime and registers the compiler pass that
-plans and replaces cooperative calls across each kernel before typing.
+loads the supported compiler runtime and registers typing templates,
+after-typing call resolution, and direct MLIR lowering.
 
-Primitive calls and ThreadData are kernel constructs. Group descriptors can
-also be created on the host and used as kernel globals. StatefulFunction
-descriptors are created on the host and used as kernel constants. Construct
-TempStorage inside each kernel. During compilation, the compiler rebuilds
-the descriptor from its compile-time constant arguments and validates them.
-The compiler rejects a descriptor that comes from a module global.
+Primitive calls and ThreadData are kernel constructs. The pipeline supports
+``this_block()``, ``ThreadData``, and block Load/Store. Other operation
+markers remain available for API introspection and report an unsupported
+primitive when called in a kernel.
 
 The module loads Load and Store during initialization. Other operation
 markers, the ``local`` and ``shared`` namespaces, and ``StatefulFunction``

@@ -25,10 +25,7 @@ from ._marker import group_primitive_marker
 _ItemT = TypeVar("_ItemT", bound=CommonNumericScalar)
 
 
-@group_operation(
-    "shuffle",
-    family_module="cuda.coop.numba_mlir._compiler._group_shuffle",
-)
+@group_operation("shuffle")
 def shuffle(
     group: BlockGroup,
     value: CommonThreadDataLike[_ItemT] | _ItemT | numpy.ndarray,

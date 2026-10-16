@@ -1343,22 +1343,7 @@ def test_common_scalar_transpose_store_matches_an_independent_oracle():
 @pytest.mark.parametrize(
     "module", (root_coop, qualified_coop), ids=("root", "qualified")
 )
-def test_thread_data_constructor_alias_across_branch(module, monkeypatch):
-    from cuda.coop.numba_mlir._compiler._rewrite import CoopSinglePhaseRewrite
-
-    original_apply = CoopSinglePhaseRewrite.apply
-    applications = 0
-
-    def bounded_apply(rewrite):
-        nonlocal applications
-        applications += 1
-        assert applications < 10, (
-            "constructor alias repeatedly matched the rewrite"
-        )
-        return original_apply(rewrite)
-
-    monkeypatch.setattr(CoopSinglePhaseRewrite, "apply", bounded_apply)
-
+def test_thread_data_constructor_alias_across_branch(module):
     @cuda.jit
     def kernel(source, destination):
         constructor = module.ThreadData

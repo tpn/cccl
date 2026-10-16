@@ -36,10 +36,7 @@ from ._marker import group_primitive_marker
 _T = TypeVar("_T", bound=CommonNumericScalar)
 
 
-@group_operation(
-    "adjacent_difference",
-    family_module="cuda.coop.numba_mlir._compiler._group_neighbors",
-)
+@group_operation("adjacent_difference")
 def adjacent_difference(
     group: BlockGroup,
     values: CommonThreadDataLike[_T] | numpy.ndarray,
@@ -101,10 +98,7 @@ def adjacent_difference(
     )
 
 
-@group_operation(
-    "discontinuity",
-    family_module="cuda.coop.numba_mlir._compiler._group_neighbors",
-)
+@group_operation("discontinuity")
 def discontinuity(
     group: BlockGroup,
     values: CommonThreadDataLike[_T] | numpy.ndarray,

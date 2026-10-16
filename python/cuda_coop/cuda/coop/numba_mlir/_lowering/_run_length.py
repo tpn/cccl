@@ -22,7 +22,7 @@ from .._compiler._operations import (
     register_factory,
 )
 from .._compiler._parameters import normalize_dim_param
-from .._types import make_invocable_from_specialization
+from .._types import prepare_specialization
 from ._core import NumbaMlirCoreAdapter
 
 
@@ -49,7 +49,7 @@ def _decode(
     ``run_length_decode_into_offsets`` factory takes six runtime arguments
     instead of four; each registered operation has one fixed argument count.
 
-    Return an invocable for the resulting signature. The rewrite supplies
+    Return a specialization for the resulting signature. The rewrite supplies
     explicit arrays for window outputs. Bulk output uses global pointers and
     returns the decoded total by reference through the provider ABI.
     """
@@ -69,7 +69,7 @@ def _decode(
     )
     metadata = factory_operation(factory)
     assert metadata is not None
-    return make_invocable_from_specialization(
+    return prepare_specialization(
         adapter.materialize(
             specialization.specialization,
             storage_abi=metadata.storage_abi,
