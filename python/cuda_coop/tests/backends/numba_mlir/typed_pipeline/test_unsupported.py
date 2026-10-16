@@ -12,10 +12,6 @@ from __future__ import annotations
 
 import pytest
 
-from ._support import requires_typed_pipeline
-
-pytestmark = requires_typed_pipeline
-
 # Primitives outside the typed pipeline's first supported surface.
 _REJECTED = [
     ("cuda.coop", "scan"),
@@ -30,7 +26,7 @@ _REJECTED = [
 
 
 @pytest.mark.parametrize("module_name, name", _REJECTED)
-def test_rejected_primitive_names_itself_and_the_switch(module_name, name):
+def test_rejected_primitive_names_itself(module_name, name):
     import importlib
 
     from numba_cuda_mlir import compiler, cuda, types
@@ -48,7 +44,6 @@ def test_rejected_primitive_names_itself_and_the_switch(module_name, name):
     assert f"{module_name}.{name} is not supported on the typed pipeline" in (
         message
     )
-    assert "Unset CUDA_COOP_NUMBA_MLIR_PIPELINE" in message
 
 
 def test_every_kernel_callable_primitive_has_a_template():

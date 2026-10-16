@@ -2,21 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-"""Build the compiled implementations chosen for cooperative load/store calls.
+"""Build source specializations for cooperative load/store calls.
 
-A factory in this module is a host-side function that specializes a CUB
-operation for a payload dtype, group size, per-thread extent, and algorithm.
-The group planner selects the registered block or warp factory and describes
-which optional controls are omitted, fixed at compile time, or supplied at
-runtime. Calling the factory creates a device callable; data movement occurs
-later when a kernel invokes that callable.
-
-Separate factories represent algorithms that need shared scratch and those
-that do not, so their argument lists agree with the planner's storage choice.
-Both paths lower a common core specialization through
-``NumbaMlirCoreAdapter``. During specialization collection they return an
-``Algorithm`` description instead of compiling it immediately, allowing
-several operations to share an NVRTC compilation.
+Factories specialize CUB operations for a payload dtype, group size,
+per-thread extent, algorithm, and static or runtime controls. Separate
+factories describe algorithms that need shared scratch and those that do not.
+Both paths lower a common core specialization through ``NumbaMlirCoreAdapter``
+and return an ``Algorithm`` for compilation by the typed pipeline.
 """
 
 import operator
@@ -55,11 +47,10 @@ from .._types import (
     Algorithm,
     BoundedInteger,
     ExactValue,
-    Invocable,
     Value,
     _validate_logical_warp_threads,
-    make_invocable_from_specialization,
     numba_type_to_wrapper,
+    prepare_specialization,
 )
 from ._core import NumbaMlirCoreAdapter, _optional_binding
 
@@ -223,14 +214,14 @@ def _load(
     oob_default: object = None,
     offset: object = None,
     threads_in_warp: SupportsIndex | None = None,
-) -> Invocable | Algorithm:
-    """Build the callable implementation for a planned load operation.
+) -> Algorithm:
+    """Build the provider specialization for a load operation.
 
     Use the registered factory identity to select block/warp semantics and
     verify whether the chosen algorithm requires scratch. Lower the common
     load specialization through the Numba adapter, including checked runtime
     counts, exact-dtype runtime defaults, and embedded static controls. The
-    factory describes a compiled callable; it does not load data.
+    factory returns a source description; it does not load data.
 
     Explicit ``ArgumentBinding`` objects distinguish omitted, static, and
     runtime controls. Legacy non-``None`` values indicate runtime presence,
@@ -264,9 +255,8 @@ def _load(
 
     Returns
     -------
-    Invocable or Algorithm
-        Compiled provider callable, or the specialization recorded when
-        ``collect_specializations`` is active.
+    Algorithm
+        Qualified provider source and ABI description.
 
     Raises
     ------
@@ -371,7 +361,7 @@ def _load(
         if registered.namespace == "warp"
         else {}
     )
-    return make_invocable_from_specialization(
+    return prepare_specialization(
         specialization,
         **invocation_topology,
     )
@@ -386,7 +376,7 @@ def load(
     oob_default=None,
     offset=None,
 ):
-    """Build a block load callable that needs no shared scratch."""
+    """Build a block load specialization that needs no shared scratch."""
 
     return _load(
         load,
@@ -409,7 +399,7 @@ def _load_with_storage(
     oob_default=None,
     offset=None,
 ):
-    """Build a block transpose load callable with shared scratch."""
+    """Build a block transpose load specialization with shared scratch."""
 
     return _load(
         _load_with_storage,
@@ -433,7 +423,7 @@ def warp_load(
     oob_default=None,
     offset=None,
 ):
-    """Build a warp load callable that needs no shared scratch."""
+    """Build a warp load specialization that needs no shared scratch."""
 
     return _load(
         warp_load,
@@ -458,7 +448,7 @@ def _warp_load_with_storage(
     oob_default=None,
     offset=None,
 ):
-    """Build a warp load callable with shared scratch."""
+    """Build a warp load specialization with shared scratch."""
 
     return _load(
         _warp_load_with_storage,
@@ -483,13 +473,13 @@ def _store(
     oob_default: object = None,
     offset: object = None,
     threads_in_warp: SupportsIndex | None = None,
-) -> Invocable | Algorithm:
-    """Build the callable implementation for a planned store operation.
+) -> Algorithm:
+    """Build the provider specialization for a store operation.
 
     Resolve the registered block/warp factory and its storage contract, then
     materialize the common store specialization with Numba-specific runtime
     count bounds. A warp provider also retains the enclosing block dimensions
-    for scratch layout. This constructs a compiled callable; it does not write
+    for scratch layout. This returns a source description; it does not write
     device memory during host-side factory evaluation.
 
     As in ``_load``, explicit bindings control whether scalar arguments are
@@ -521,9 +511,8 @@ def _store(
 
     Returns
     -------
-    Invocable or Algorithm
-        Compiled provider callable, or the specialization recorded by an
-        active ``collect_specializations`` context.
+    Algorithm
+        Qualified provider source and ABI description.
 
     Raises
     ------
@@ -618,7 +607,7 @@ def _store(
         if registered.namespace == "warp"
         else {}
     )
-    return make_invocable_from_specialization(
+    return prepare_specialization(
         specialization,
         **invocation_topology,
     )
@@ -633,7 +622,7 @@ def store(
     oob_default=None,
     offset=None,
 ):
-    """Build a block store callable that needs no shared scratch."""
+    """Build a block store specialization that needs no shared scratch."""
 
     return _store(
         store,
@@ -656,7 +645,7 @@ def _store_with_storage(
     oob_default=None,
     offset=None,
 ):
-    """Build a block transpose store callable with shared scratch."""
+    """Build a block transpose store specialization with shared scratch."""
 
     return _store(
         _store_with_storage,
@@ -680,7 +669,7 @@ def warp_store(
     oob_default=None,
     offset=None,
 ):
-    """Build a warp store callable that needs no shared scratch."""
+    """Build a warp store specialization that needs no shared scratch."""
 
     return _store(
         warp_store,
@@ -705,7 +694,7 @@ def _warp_store_with_storage(
     oob_default=None,
     offset=None,
 ):
-    """Build a warp store callable with shared scratch."""
+    """Build a warp store specialization with shared scratch."""
 
     return _store(
         _warp_store_with_storage,

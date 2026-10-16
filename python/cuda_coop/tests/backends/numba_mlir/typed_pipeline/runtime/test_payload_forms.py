@@ -20,10 +20,6 @@ from numba_cuda_mlir import cuda, types
 import cuda.coop.numba_mlir as qualified_coop
 from cuda import coop
 
-from .._support import requires_typed_pipeline
-
-pytestmark = requires_typed_pipeline
-
 THREADS = 64
 
 

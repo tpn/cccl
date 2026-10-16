@@ -24,10 +24,7 @@ from .._support import (
     STORAGE_FREE,
     TRANSPOSING,
     f32_in_out,
-    requires_typed_pipeline,
 )
-
-pytestmark = requires_typed_pipeline
 
 
 def test_inferred_payload_takes_the_load_source_dtype():

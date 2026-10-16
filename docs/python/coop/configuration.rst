@@ -33,7 +33,7 @@ Both commands install the same ``cuda-coop`` wheel with the same DSL
 integrations. The extra only adds the dependency requirements declared in
 ``pyproject.toml`` so pip installs the supported Numba-CUDA-MLIR stack for
 the selected CUDA major version. The current integration requires
-``numba-cuda-mlir>=0.5.0,<0.6``.
+``numba-cuda-mlir==0.5.4``.
 Installing an extra does not register a backend in a running Python process;
 see :ref:`installation versus registration <coop-faq-installed-extra>`.
 

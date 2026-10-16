@@ -21,9 +21,7 @@ import cuda.coop.numba_mlir as qualified_coop
 from cuda import coop
 from cuda.coop.numba_mlir._pipeline import testing
 
-from .._support import BLOCK, CHIP, f32_in_out, requires_typed_pipeline
-
-pytestmark = requires_typed_pipeline
+from .._support import BLOCK, CHIP, f32_in_out
 
 
 def test_items_per_thread_is_the_extent_as_a_literal():

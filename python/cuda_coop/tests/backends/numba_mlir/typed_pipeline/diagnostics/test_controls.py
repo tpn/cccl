@@ -17,9 +17,7 @@ from cuda import coop
 from cuda.coop.numba_mlir._pipeline import testing
 from cuda.coop.numba_mlir._pipeline._errors import TypedPipelineError
 
-from .._support import BLOCK, CHIP, f32_in_out, requires_typed_pipeline
-
-pytestmark = requires_typed_pipeline
+from .._support import BLOCK, CHIP, f32_in_out
 
 
 def _compile(kernel, *extra):
@@ -66,7 +64,7 @@ def test_static_valid_items_beyond_the_tile(kind):
 
 
 @pytest.mark.parametrize("control", ["valid_items", "offset"])
-def test_a_static_control_must_be_an_integer(control):
+def test_static_control_requires_int(control):
     def valid_items_kernel(source, output):
         block = coop.this_block()
         items = coop.ThreadData(4)
@@ -86,7 +84,7 @@ def test_a_static_control_must_be_an_integer(control):
         _compile(kernel)
 
 
-def test_a_static_offset_must_be_nonnegative():
+def test_static_offset_nonnegative():
     def kernel(source, output):
         block = coop.this_block()
         items = coop.ThreadData(4)

@@ -30,7 +30,7 @@ from .._compiler._parameters import (
     normalize_dim_param,
 )
 from .._semantic import _normalize_numba_callable, _numba_semantic_token
-from .._types import make_invocable_from_specialization, numba_type_to_wrapper
+from .._types import numba_type_to_wrapper, prepare_specialization
 from ._core import NumbaMlirCoreAdapter
 from ._reduce import normalize_reduce_operation, validate_reduce_operator_dtype
 
@@ -97,7 +97,7 @@ def reduce_batched(
     barrier over that warp's lanes. Add a C++ declaration for the dtype when
     it has no built-in spelling. Input and output use the same dtype.
 
-    Keep the logical width and enclosing block shape on the invocable so
+    Keep the logical width and enclosing block shape on the specialization so
     provider compilation can size and assign per-warp scratch correctly. The
     shared specialization synchronizes the participating logical warp; other
     logical groups need not enter the call.
@@ -121,7 +121,7 @@ def reduce_batched(
         synchronization_scope=SynchronizationScope.WARP,
         extra_type_definitions=(numba_type_to_wrapper(dtype),),
     )
-    return make_invocable_from_specialization(
+    return prepare_specialization(
         specialization,
         logical_warp_threads=threads_in_warp,
         block_threads=block_dim,

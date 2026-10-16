@@ -1226,13 +1226,12 @@ _REUSE_THREADS = 256
 _REUSE_ROUNDS = 10
 
 
-def _run_same_direction_warp_reuse(width, *, check_output=True):
+def _run_same_direction_warp_reuse(width):
     """Stress warp storage reuse when sibling groups progress separately.
 
     Every group repeats the same layout change with new values. Group members
     share an iteration count, but sibling groups may finish at different
-    times. A host index calculation checks each observed iteration. Racecheck
-    also uses this kernel without output checks for its negative control.
+    times. A host index calculation checks each observed iteration.
     """
 
     @cuda.jit
@@ -1262,23 +1261,20 @@ def _run_same_direction_warp_reuse(width, *, check_output=True):
     observed = np.full(_REUSE_ROUNDS * _REUSE_THREADS * 3, -1, dtype=np.int32)
     kernel[1, _REUSE_THREADS](observed, 3)
     cuda.synchronize()
-    if check_output:
-        expected = np.full_like(observed, -1)
-        for group in range(_REUSE_THREADS // width):
-            for iteration in range(8 + group % 3):
-                for lane in range(width):
-                    for item in range(3):
-                        thread = group * width + lane
-                        index = (
-                            iteration * _REUSE_THREADS * 3 + thread * 3 + item
-                        )
-                        expected[index] = (
-                            iteration * 997
-                            + group * width * 3
-                            + item * width
-                            + lane
-                        )
-        np.testing.assert_array_equal(observed, expected)
+    expected = np.full_like(observed, -1)
+    for group in range(_REUSE_THREADS // width):
+        for iteration in range(8 + group % 3):
+            for lane in range(width):
+                for item in range(3):
+                    thread = group * width + lane
+                    index = iteration * _REUSE_THREADS * 3 + thread * 3 + item
+                    expected[index] = (
+                        iteration * 997
+                        + group * width * 3
+                        + item * width
+                        + lane
+                    )
+    np.testing.assert_array_equal(observed, expected)
 
 
 @pytest.mark.parametrize("width", (8, 16, 32))
@@ -1296,44 +1292,33 @@ def test_warp_exchange_reuse_racecheck(width):
     sanitizer = shutil.which("compute-sanitizer")
     if sanitizer is None:
         pytest.skip("compute-sanitizer is not available")
-    for disable_barrier in (False, True):
-        script = f"""
+    script = f"""
 import runpy
 from pathlib import Path
 import cuda.coop.numba_mlir as coop
 assert Path(coop.__file__).resolve() == Path({_QUALIFIED_COOP_ORIGIN.as_posix()!r})
 namespace = runpy.run_path({str(Path(__file__).resolve())!r})
-if {disable_barrier!r}:
-    from cuda.coop.numba_mlir._compiler._rewrite_storage import _StorageRewrite
-    _StorageRewrite._emit_temp_storage_auto_sync = lambda *args, **kwargs: None
-namespace['_run_same_direction_warp_reuse']({width}, check_output={not disable_barrier!r})
+namespace['_run_same_direction_warp_reuse']({width})
 """  # noqa: E501 - Preserve embedded source bytes.
-        result = subprocess.run(
-            [
-                sanitizer,
-                "--tool",
-                "racecheck",
-                "--error-exitcode",
-                "99",
-                sys.executable,
-                _SAFE_PATH_FLAG,
-                "-c",
-                script,
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-        output = result.stdout + result.stderr
-        summary = re.search(
-            r"RACECHECK SUMMARY: (\d+) hazards displayed", output
-        )
-        assert summary is not None, output
-        if disable_barrier:
-            # A clean negative control would make this an insensitive test.
-            assert result.returncode == 99, output
-            assert int(summary[1]) > 0, output
-        else:
-            assert result.returncode == 0, output
-            assert int(summary[1]) == 0, output
+    result = subprocess.run(
+        [
+            sanitizer,
+            "--tool",
+            "racecheck",
+            "--error-exitcode",
+            "99",
+            sys.executable,
+            _SAFE_PATH_FLAG,
+            "-c",
+            script,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    output = result.stdout + result.stderr
+    summary = re.search(r"RACECHECK SUMMARY: (\d+) hazards displayed", output)
+    assert summary is not None, output
+    assert result.returncode == 0, output
+    assert int(summary[1]) == 0, output

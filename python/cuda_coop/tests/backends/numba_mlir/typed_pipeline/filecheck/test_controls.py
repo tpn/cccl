@@ -17,16 +17,14 @@ from numba_cuda_mlir import cuda, types
 from cuda import coop
 from cuda.coop.numba_mlir._pipeline import testing
 
-from .._support import BLOCK, CHIP, f32_in_out, requires_typed_pipeline
-
-pytestmark = requires_typed_pipeline
+from .._support import BLOCK, CHIP, f32_in_out
 
 
 def _runtime_signature(*controls):
     return types.void(*f32_in_out().args, *controls)
 
 
-def test_runtime_controls_are_marked_runtime():
+def test_runtime_control_plan():
     @cuda.jit
     def partial(source, output, n, pad, off):
         block = coop.this_block()

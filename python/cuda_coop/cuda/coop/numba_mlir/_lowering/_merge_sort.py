@@ -32,7 +32,7 @@ from .._compiler._parameters import (
     normalize_dim_param,
 )
 from .._semantic import _normalize_numba_callable, _numba_semantic_token
-from .._types import make_invocable_from_specialization
+from .._types import prepare_specialization
 from ._core import NumbaMlirCoreAdapter
 
 
@@ -106,7 +106,7 @@ def _make_provider(namespace, pairs, partial):
 
         Adapt the shared signature with this factory's registered storage and
         synchronization scopes. A Python comparator compiles during this step.
-        Return the invocable, carrying exact block geometry for warp providers
+        Return the specialization, carrying exact block geometry for warp
         so their scratch slices use the correct linear thread rank.
         """
 
@@ -146,12 +146,12 @@ def _make_provider(namespace, pairs, partial):
             synchronization_scope=metadata.synchronization_scope,
         )
         if namespace == "warp":
-            return make_invocable_from_specialization(
+            return prepare_specialization(
                 specialization,
                 logical_warp_threads=threads_in_warp,
                 block_threads=block_dim,
             )
-        return make_invocable_from_specialization(specialization)
+        return prepare_specialization(specialization)
 
     provider.__name__ = f"{namespace}_{operation}"
     scope = (

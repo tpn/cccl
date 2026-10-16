@@ -13,11 +13,6 @@ from __future__ import annotations
 
 from . import _bridges as nb
 
-MODE_HINT = (
-    "Unset CUDA_COOP_NUMBA_MLIR_PIPELINE to compile this kernel with the "
-    "default pipeline."
-)
-
 SUPPORTED_SURFACE = (
     "this_block(), ThreadData, and load and store on a block group"
 )
@@ -31,14 +26,12 @@ def unsupported_primitive(qualified_name: str) -> TypedPipelineError:
     """The error for a cooperative primitive the typed pipeline lacks."""
 
     return TypedPipelineError(
-        f"{qualified_name} is not supported on the typed pipeline "
-        "(CUDA_COOP_NUMBA_MLIR_PIPELINE=typed). The typed pipeline "
-        f"supports {SUPPORTED_SURFACE}. {MODE_HINT}"
+        f"{qualified_name} is not supported on the typed pipeline. "
+        f"The typed pipeline supports {SUPPORTED_SURFACE}."
     )
 
 
 __all__ = [
-    "MODE_HINT",
     "SUPPORTED_SURFACE",
     "TypedPipelineError",
     "unsupported_primitive",

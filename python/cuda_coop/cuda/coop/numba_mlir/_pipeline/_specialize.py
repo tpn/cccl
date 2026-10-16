@@ -12,7 +12,7 @@ the checked sites and the launch's block it:
   kernel's target, with one compile context for all of them;
 * decides ``launch_bounds`` from the block's thread count;
 * decides which sites take scratch, from each provider's storage ABI, and
-  places a barrier after every one of them, as coop's planner does.
+  places a barrier after every one of them.
 
 Specializing generates provider source and nothing more: this stage does
 not call NVRTC, so scratch use is decided before any size is known. It does
@@ -138,19 +138,17 @@ def _one_compile_context(context: Any) -> Iterator[None]:
 def _instantiate(
     requests: Sequence[LoadStoreRequest], block: tuple, target, context
 ) -> list:
-    from .._types import collect_specializations, kernel_compile_target
+    from .._types import kernel_compile_target
 
+    algorithms = []
     with (
         kernel_compile_target(target),
         _one_compile_context(context),
-        collect_specializations() as collected,
     ):
         for request in requests:
             factory, kwargs = _complete(request, block)
-            factory(**kwargs)
-    if len(collected) != len(requests):
-        raise AssertionError("a provider factory did not specialize once")
-    return collected
+            algorithms.append(factory(**kwargs))
+    return algorithms
 
 
 # Decisions -------------------------------------------------------------------

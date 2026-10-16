@@ -22,12 +22,6 @@ from numba_cuda_mlir.numba_cuda.core.errors import TypingError
 from numba_cuda_mlir.numba_cuda.misc.special import literal_unroll
 
 import cuda.coop.numba_mlir as coop
-from cuda.coop.numba_mlir._compiler._group_planner_support import (
-    GroupRewriteError,
-)
-from cuda.coop.numba_mlir._compiler._rewrite_support import (
-    CoopSinglePhaseRewriteError,
-)
 
 pytestmark = [pytest.mark.backend_numba_mlir, pytest.mark.compile]
 
@@ -144,7 +138,7 @@ def test_rebound_explicit_dtype_is_not_replaced_by_write_inference():
             destination[1] = second[0]
 
     with pytest.raises(
-        (CoopSinglePhaseRewriteError, TypingError),
+        TypingError,
         match="dtype must resolve",
     ):
         _compile(kernel, types.int32[::1])
@@ -167,9 +161,7 @@ def test_rebound_shared_shape_is_rejected_with_cooperative_storage():
                 coop.this_block(), destination, payload, algorithm="transpose"
             )
 
-    with pytest.raises(
-        (CoopSinglePhaseRewriteError, TypingError), match="would alias"
-    ):
+    with pytest.raises(TypingError, match="would alias"):
         _compile(kernel, types.int32[::1])
 
 
@@ -209,9 +201,7 @@ def test_none_alias_reports_descriptor_error_before_type_inference():
         coop.load(coop.this_block(), source, payload, temp_storage=storage)
         destination[cuda.threadIdx.x] = payload[0]
 
-    with pytest.raises(
-        (GroupRewriteError, TypingError), match="TempStorage.*on every path"
-    ):
+    with pytest.raises(TypingError, match="TempStorage.*on every path"):
         _compile(kernel, types.int32[::1], types.int32[::1])
 
 
@@ -224,9 +214,7 @@ def test_standalone_primitive_helper_reports_inline_requirement():
     def kernel(source, destination):
         standalone(destination, source[cuda.threadIdx.x])
 
-    with pytest.raises(
-        (GroupRewriteError, TypingError), match="standalone.*must be inlined"
-    ):
+    with pytest.raises(TypingError, match="standalone.*must be inlined"):
         _compile(kernel, types.int32[::1], types.int32[::1])
 
 
@@ -251,7 +239,7 @@ def test_literal_unroll_cannot_determine_cooperative_payload_shape(
             destination[cuda.threadIdx.x] = payload[0]
 
     with pytest.raises(
-        (GroupRewriteError, TypingError),
+        TypingError,
         match="does not support literal_unroll values",
     ):
         _compile(kernel, types.int32[::1], types.int32[::1])
@@ -290,7 +278,7 @@ def test_literal_unroll_cannot_determine_cooperative_selector():
             )
 
     with pytest.raises(
-        (GroupRewriteError, TypingError),
+        TypingError,
         match="does not support literal_unroll values",
     ):
         _compile(kernel, types.int32[::1], types.int32[::1])
@@ -354,7 +342,7 @@ def test_inlined_user_shared_allocation_is_checked_after_inlining(
         ]
     else:
         with pytest.raises(
-            CoopSinglePhaseRewriteError,
+            TypingError,
             match=(
                 r"shared-memory backing.*test_storage_diagnostics.py.*"
                 r"would alias"
@@ -387,7 +375,7 @@ def test_literal_unroll_cannot_determine_cooperative_storage_or_partition(
                 coop.store(group, destination, source[cuda.threadIdx.x])
 
     with pytest.raises(
-        (GroupRewriteError, TypingError),
+        TypingError,
         match="does not support literal_unroll values",
     ):
         _compile(kernel, types.int32[::1], types.int32[::1])
@@ -420,7 +408,7 @@ def test_implicit_oversized_storage_rejects_user_static_shared_allocation(
         )
 
     with pytest.raises(
-        CoopSinglePhaseRewriteError,
+        TypingError,
         match=(
             "dynamic shared-memory backing.*static cuda.shared.array.*"
             "would alias"
@@ -460,7 +448,7 @@ def test_reduce_shared_memory_coexistence(kind, shape):
         ).metadata["ltoir"]
     else:
         with pytest.raises(
-            CoopSinglePhaseRewriteError,
+            TypingError,
             match="shared-memory backing.*dynamic/runtime-sized.*would alias",
         ):
             _compile(

@@ -27,9 +27,7 @@ from numba_cuda_mlir import cuda, types
 from cuda import coop
 from cuda.coop.numba_mlir._pipeline import testing
 
-from .._support import CHIP, requires_typed_pipeline
-
-pytestmark = requires_typed_pipeline
+from .._support import CHIP
 
 ITEMS = 4
 BLOCK = (64, 1, 1)

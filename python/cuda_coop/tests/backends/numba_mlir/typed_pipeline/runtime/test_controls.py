@@ -21,9 +21,7 @@ from numba_cuda_mlir import cuda
 
 from cuda import coop
 
-from .._support import requires_typed_pipeline, run_python
-
-pytestmark = requires_typed_pipeline
+from .._support import run_python
 
 THREADS = 128
 ITEMS = 4
@@ -41,7 +39,7 @@ def _blank(size=TILE, dtype=np.float32):
 
 
 @pytest.mark.parametrize("algorithm", ALGORITHMS)
-def test_load_a_partial_tile_leaves_the_rest(algorithm):
+def test_partial_load_preserves_tail(algorithm):
     @cuda.jit
     def partial_load(source, output, n):
         block = coop.this_block()
@@ -236,7 +234,6 @@ def test_runtime_values_share_a_specialization_and_literals_do_not():
             counts[function.__name__] = len(calls) - before
         print(json.dumps(counts))
         """,
-        "typed",
     )
     assert result.returncode == 0, result.stderr
     counts = json.loads(result.stdout.strip().splitlines()[-1])

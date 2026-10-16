@@ -2,11 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-"""CUDA_COOP_NUMBA_MLIR_PIPELINE selects exactly one pipeline per process."""
+"""Backend activation registers the typed pipeline by default."""
 
 from __future__ import annotations
-
-import pytest
 
 from ._support import run_python
 
@@ -28,31 +26,10 @@ print("call-resolution", "CoopCallResolution" in rewrites)
 """
 
 
-@pytest.mark.parametrize("pipeline", [None, "", "planner"])
-def test_default_registers_the_planner_only(pipeline):
-    result = run_python(_REPORT, pipeline)
-    assert result.returncode == 0, result.stderr
-    assert "planners ['CoopWholeFunctionPlanner']" in result.stdout
-    assert "pipeline-imported False" in result.stdout
-    assert "call-resolution False" in result.stdout
-
-
-@pytest.mark.parametrize("pipeline", ["typed", " Typed "])
-def test_typed_registers_call_resolution_and_never_imports_the_planner(
-    pipeline,
-):
-    result = run_python(_REPORT, pipeline)
+def test_default_registers_call_resolution_without_a_planner():
+    result = run_python(_REPORT)
     assert result.returncode == 0, result.stderr
     assert "planners []" in result.stdout
     assert "planner-imported False" in result.stdout
     assert "pipeline-imported True" in result.stdout
     assert "call-resolution True" in result.stdout
-
-
-def test_unknown_pipeline_is_an_error():
-    result = run_python("import cuda.coop.numba_mlir", "mixed")
-    assert result.returncode != 0
-    assert (
-        "CUDA_COOP_NUMBA_MLIR_PIPELINE='mixed' is not a cuda.coop pipeline; "
-        "use one of planner, typed"
-    ) in result.stderr

@@ -33,10 +33,7 @@ _LengthT = TypeVar("_LengthT", bound=IntegralScalar)
 _ItemT = TypeVar("_ItemT", bound=CommonNumericScalar)
 
 
-@group_operation(
-    "run_length_decode",
-    family_module="cuda.coop.numba_mlir._compiler._group_run_length",
-)
+@group_operation("run_length_decode")
 def run_length_decode(
     group: BlockGroup,
     run_values: CommonThreadDataLike[_ItemT] | numpy.ndarray,
@@ -113,10 +110,7 @@ def run_length_decode(
     )
 
 
-@group_operation(
-    "run_length_decode_into",
-    family_module="cuda.coop.numba_mlir._compiler._group_run_length",
-)
+@group_operation("run_length_decode_into")
 def run_length_decode_into(
     group: BlockGroup,
     run_values: CommonThreadDataLike[_ItemT] | numpy.ndarray,

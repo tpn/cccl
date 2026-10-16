@@ -22,7 +22,7 @@ from cuda.coop._core.block.radix_sort import (
 
 from .._compiler._operations import StorageABI, register_factory
 from .._compiler._parameters import normalize_dim_param, normalize_dtype_param
-from .._types import make_invocable_from_specialization
+from .._types import prepare_specialization
 from ._core import NumbaMlirArrayInputTransform, NumbaMlirCoreAdapter
 
 
@@ -30,7 +30,7 @@ def _materialize(adapter, specialization):
     """Bind the block storage contract and expose a radix provider callable.
 
     Translate the shared parameter descriptions to Numba, then create the
-    invocable that supplies wrapper code and storage metadata to compilation.
+    specialization supplying wrapper code and storage metadata.
     The adapter records block execution and synchronization scopes.
     """
 
@@ -40,7 +40,7 @@ def _materialize(adapter, specialization):
         execution_scope=SynchronizationScope.BLOCK,
         synchronization_scope=SynchronizationScope.BLOCK,
     )
-    return make_invocable_from_specialization(specialization)
+    return prepare_specialization(specialization)
 
 
 def radix_rank_keys(

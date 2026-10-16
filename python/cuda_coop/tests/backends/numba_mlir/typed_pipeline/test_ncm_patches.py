@@ -5,8 +5,7 @@
 """The typed pipeline's Numba-CUDA-MLIR patches: when they apply, their pins,
 and how kernels without cooperative types behave under them.
 
-Activation tests start a fresh interpreter per case and run in any mode; the
-kernels need typed mode.
+Activation tests start a fresh interpreter per case.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ._support import TYPED, requires_typed_pipeline, run_python
+from ._support import run_python
 
 _TARGETS = """
 from numba_cuda_mlir.typing import cuda as cuda_typing
@@ -57,20 +56,13 @@ PATCHED = [
 ]
 
 
-@pytest.mark.parametrize("pipeline", [None, "planner"])
-def test_the_default_pipeline_leaves_the_compiler_untouched(pipeline):
-    result = run_python(_REPORT, pipeline)
-    assert result.returncode == 0, result.stderr
-    assert "changed []" in result.stdout
-
-
 def test_the_typed_pipeline_replaces_only_its_patch_targets():
-    result = run_python(_REPORT, "typed")
+    result = run_python(_REPORT)
     assert result.returncode == 0, result.stderr
     assert f"changed {PATCHED}" in result.stdout
 
 
-def test_a_changed_patch_target_fails_closed():
+def test_changed_patch_target_rejected():
     code = (
         _TARGETS
         + """
@@ -83,7 +75,7 @@ except ImportError as exc:
 print("local-array", "generic" in vars(cuda_typing.LocalArrayTemplate))
 """
     )
-    result = run_python(code, "typed")
+    result = run_python(code)
     assert result.returncode == 0, result.stderr
     assert (
         "TypedPipelineUnavailableError The cuda.coop typed pipeline's "
@@ -94,26 +86,6 @@ print("local-array", "generic" in vars(cuda_typing.LocalArrayTemplate))
     assert "local-array False" in result.stdout
 
 
-def test_another_compiler_version_fails_closed():
-    code = """
-import numba_cuda_mlir
-numba_cuda_mlir.__version__ = "0.5.5"
-try:
-    import cuda.coop.numba_mlir._pipeline as pipeline
-    pipeline._activate()
-except ImportError as exc:
-    print(type(exc).__name__, exc)
-"""
-    result = run_python(code, "typed")
-    assert result.returncode == 0, result.stderr
-    assert (
-        "TypedPipelineUnavailableError The cuda.coop typed pipeline's "
-        "'argument-sized cuda.local.array' patch was written against "
-        "Numba-CUDA-MLIR 0.5.4, but the installed compiler is 0.5.5."
-    ) in result.stdout
-
-
-@requires_typed_pipeline
 def test_apply_is_idempotent():
     from cuda.coop.numba_mlir._pipeline import _ncm_patches
 
@@ -123,18 +95,9 @@ def test_apply_is_idempotent():
     assert sorted(f"{o.__name__}.{n}" for o, n in replaced) == PATCHED
 
 
-@pytest.mark.skipif(TYPED, reason="checks the pins without applying them")
-def test_the_pins_match_the_installed_compiler():
-    from cuda.coop.numba_mlir._pipeline import _ncm_patches
-
-    for patch in _ncm_patches.PATCHES:
-        _ncm_patches.check(patch)
-
-
 # Argument-sized cuda.local.array (U-P-1) ------------------------------------
 
 
-@requires_typed_pipeline
 def test_a_plain_kernel_with_an_argument_sized_local_array_compiles():
     from numba_cuda_mlir import cuda, types
 
@@ -155,7 +118,6 @@ def test_a_plain_kernel_with_an_argument_sized_local_array_compiles():
     assert len(triangle.overloads) == 2
 
 
-@requires_typed_pipeline
 def test_a_computed_local_array_shape_is_still_refused():
     from numba_cuda_mlir import cuda, types
     from numba_cuda_mlir.numba_cuda.core.errors import TypingError
@@ -170,7 +132,6 @@ def test_a_computed_local_array_shape_is_still_refused():
         computed[1, 1](np.zeros(1, np.int32), 2)
 
 
-@requires_typed_pipeline
 def test_a_tuple_local_array_shape_from_an_argument_is_still_refused():
     from numba_cuda_mlir import cuda, types
     from numba_cuda_mlir.numba_cuda.core.errors import TypingError
@@ -201,7 +162,6 @@ def test_tuple_refinement_is_scoped_to_thread_data():
     assert not holds_thread_data(plain)
 
 
-@requires_typed_pipeline
 def test_a_plain_kernel_projecting_tuples_is_unchanged():
     from numba_cuda_mlir import cuda, types
 
@@ -224,7 +184,6 @@ def test_a_plain_kernel_projecting_tuples_is_unchanged():
 # Phi of two ThreadData constructors (U-H1-3) --------------------------------
 
 
-@requires_typed_pipeline
 def test_a_plain_kernel_joining_arrays_and_scalars_is_unchanged():
     from numba_cuda_mlir import cuda, types
 

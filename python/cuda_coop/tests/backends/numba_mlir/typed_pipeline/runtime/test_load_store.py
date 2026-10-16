@@ -20,9 +20,7 @@ from numba_cuda_mlir import cuda
 import cuda.coop as coop_common
 import cuda.coop.numba_mlir as coop_backend
 
-from .._support import ALGORITHMS, requires_typed_pipeline, run_python
-
-pytestmark = requires_typed_pipeline
+from .._support import ALGORITHMS, run_python
 
 THREADS = 128
 ITEMS = 4
@@ -50,7 +48,7 @@ def test_k1_load_store_inferred(coop):
 
 
 @pytest.mark.parametrize("algorithm", ["direct", "transpose"])
-def test_two_constructors_joined_by_a_branch(algorithm):
+def test_branch_joins_two_constructors(algorithm):
     coop = coop_common
 
     @cuda.jit
@@ -172,7 +170,6 @@ def test_one_nvrtc_compile_cold_and_none_warm():
             counts.append(len(calls) - before)
         print(json.dumps(counts))
         """,
-        "typed",
     )
     assert result.returncode == 0, result.stderr
     cold, warm = json.loads(result.stdout.strip().splitlines()[-1])

@@ -7,9 +7,7 @@
 Each kernel-callable object of both public APIs, ``cuda.coop`` and
 ``cuda.coop.numba_mlir``, gets one typing template. Objects the typed
 pipeline supports are typed for real; every other one gets a template that
-rejects the call with ``unsupported_primitive``, so a kernel never falls
-back to the planner and never fails with Numba's generic "untyped global"
-message.
+rejects the call with ``unsupported_primitive`` and a cooperative diagnostic.
 
 ``load`` and ``store`` are reached through inline wrappers. Numba typing
 cannot refine a call argument from a template, and a payload's
@@ -36,7 +34,7 @@ payload, whose extent call resolution reads from the IR, and a
 ``cuda.coop`` call refuses one with coop's common-API diagnostic.
 
 A ``ThreadData``'s ``items_per_thread`` attribute is its extent as an
-integer literal, the constant coop's planner substitutes for it.
+integer literal.
 """
 
 from __future__ import annotations

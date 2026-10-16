@@ -10,7 +10,6 @@ passed by pointer. They also check that provider artifacts include the
 callback code needed at link time.
 """
 
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -367,84 +366,6 @@ def test_pointer_abi_adapts_aggregate_operator(monkeypatch):
     wrapper = specialized.wrap_decl("binary_op")
     assert "const storage_t& wp_0" in wrapper
     assert f"{specialized.name}(&wp_0, &wp_1, &result);" in wrapper
-
-
-def test_provider_artifacts_include_callback_and_wrapper_ltoir(monkeypatch):
-    """Retain callback and wrapper images as separate device-link inputs.
-
-    This provider has no scratch, so its layout query tuple is empty. It must
-    still keep both artifacts alive without linking them for metadata.
-    """
-
-    from numba_cuda_mlir import types
-
-    from cuda.coop._core import SynchronizationScope
-    from cuda.coop.numba_mlir import _types
-    from cuda.coop.numba_mlir._compiler._operations import StorageABI
-
-    operator = _types.StatelessOperator(
-        "cuda_coop_numba_mlir_Ftest",
-        "::cuda::std::int32_t",
-        ("::cuda::std::int32_t", "::cuda::std::int32_t"),
-        b"callback-ltoir",
-        compute_capability=(9, 0),
-    )
-    algorithm = _types.Algorithm(
-        "FakeAlgorithm<::cuda::std::int32_t>",
-        "Reduce",
-        "artifact_reduce",
-        [],
-        [],
-        [
-            [
-                _types.Value(types.int32),
-                operator,
-                _types.Value(types.int32, is_output=True),
-            ]
-        ],
-        storage_abi=StorageABI.NONE,
-        execution_scope=SynchronizationScope.NONE,
-        synchronization_scope=SynchronizationScope.NONE,
-        compile_context=object(),
-        template_arguments={},
-    )
-    compile_identity = _types.nvrtc.CompilerIdentity(
-        cc=90, rdc=True, code="lto", compiler_options=()
-    )
-    compile_calls = []
-
-    def compile_provider(**kwargs):
-        compile_calls.append(kwargs)
-        return object(), (b"provider-ltoir", ())
-
-    monkeypatch.setattr(_types.nvrtc, "compile_with_layouts", compile_provider)
-    monkeypatch.setattr(
-        _types,
-        "_ltoir_to_ptx",
-        lambda *args, **kwargs: pytest.fail(
-            "provider metadata must not link to PTX"
-        ),
-    )
-    monkeypatch.setattr(
-        algorithm,
-        "_current_provider_compile_identity",
-        lambda: compile_identity,
-    )
-
-    invocable = _types.make_invocable_from_specialization(algorithm)
-    artifacts = [Path(path) for path in invocable.files]
-
-    assert [artifact.suffix for artifact in artifacts] == [".ltoir", ".ltoir"]
-    assert [artifact.read_bytes() for artifact in artifacts] == [
-        b"callback-ltoir",
-        b"provider-ltoir",
-    ]
-    assert algorithm.lto_irs == [b"callback-ltoir", b"provider-ltoir"]
-    assert compile_calls[0]["code"] == "lto"
-    assert compile_calls[0]["layout_types"] == ()
-    assert operator.forward_decl() in compile_calls[0]["cpp"]
-    assert invocable.temp_storage_bytes == 0
-    assert invocable.temp_storage_alignment == 1
 
 
 def test_provider_rejects_callback_lto_for_a_different_target():

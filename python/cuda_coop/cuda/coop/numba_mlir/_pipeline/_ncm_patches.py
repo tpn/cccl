@@ -7,8 +7,7 @@
 Each patch replaces attributes of Numba-CUDA-MLIR classes with versions that
 behave as an upstream ask would make them, and is listed with that ask in the
 ``_bridges`` table. The typed pipeline's ``_activate`` applies them once,
-before it registers anything; the default pipeline never imports this
-module, so it leaves the compiler untouched.
+before it registers anything.
 
 A patch is pinned to what it was written against: Numba-CUDA-MLIR
 ``NCM_VERSION`` and a digest of the source of every attribute it replaces or
@@ -103,8 +102,8 @@ def check(patch: Patch) -> None:
     raise nb.TypedPipelineUnavailableError(
         f"The cuda.coop typed pipeline's {patch.name!r} patch was written "
         f"against Numba-CUDA-MLIR {NCM_VERSION}, but {changed}. The patch is "
-        f"retired by {patch.ask}; until then, unset "
-        "CUDA_COOP_NUMBA_MLIR_PIPELINE to use the default pipeline."
+        f"retired by {patch.ask}. Install the compatible compiler version "
+        "and source revision before activating cuda.coop.numba_mlir."
     )
 
 

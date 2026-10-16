@@ -2,12 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-"""Compile cooperative kernels through Numba typing instead of the planner.
+"""Compile cooperative kernels through Numba typing and direct MLIR lowering.
 
-Setting ``CUDA_COOP_NUMBA_MLIR_PIPELINE=typed`` before the backend activates
-selects this pipeline in place of ``CoopWholeFunctionPlanner``. No planner is
-registered, and the pipeline has four stages, all on Numba-CUDA-MLIR's own
-extension points:
+Backend activation registers this pipeline. It has four stages, all on
+Numba-CUDA-MLIR's own extension points:
 
 1. typing templates on cooperative Numba types (``_types``, ``_templates``),
    which give each cooperative call a request that knows nothing of the
@@ -34,8 +32,7 @@ _activated = False
 def _activate() -> None:
     """Register the pipeline's typing, rewrite and lowering hooks once.
 
-    The backend's activation calls this under its activation lock, in place
-    of registering the planner.
+    The backend's activation calls this under its activation lock.
     """
 
     global _activated

@@ -40,7 +40,7 @@ integrations. The extra only adds the dependency requirements declared in
 selected CUDA major version.
 
 Python 3.10 through 3.14 is supported. The current backend integration
-requires `numba-cuda-mlir>=0.5.0,<0.6`.
+requires `numba-cuda-mlir==0.5.4`.
 
 Backend compiler and runtime CI is configured for Linux x86-64 with Python
 3.14: CUDA 13 in pull requests and CUDA 12 in the nightly matrix. The nightly

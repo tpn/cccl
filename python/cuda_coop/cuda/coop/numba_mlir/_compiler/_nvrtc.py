@@ -161,12 +161,6 @@ class CompileTarget:
             and not targetoptions.get("debug", False),
         )
 
-    @property
-    def arch(self) -> str:
-        """Return the architecture spelling used in generated symbols."""
-
-        return f"{self.cc}{self.arch_suffix}"
-
     def nvrtc_kwargs(self) -> dict[str, Any]:
         """Return keywords for ``compile`` and ``compiler_identity``."""
 

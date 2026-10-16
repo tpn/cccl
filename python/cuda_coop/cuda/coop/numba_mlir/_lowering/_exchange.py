@@ -5,7 +5,7 @@
 """Materialize Numba-CUDA-MLIR providers for CUB Exchange calls.
 
 These host factories translate compiler dtypes to shared-core descriptions,
-then adapt the selected CUB algorithm into an invocable. Plain, ranked, and
+then adapt the selected CUB algorithm into a specialization. Plain, ranked, and
 flagged factories have distinct registered ABIs because they consume different
 runtime arrays. Group planning emits a result marker. The provider rewrite
 replaces that marker with a local-array allocation. Providers receive separate
@@ -42,7 +42,7 @@ from .._compiler._parameters import (
     normalize_dim_param,
     normalize_dtype_param,
 )
-from .._types import make_invocable_from_specialization, numba_type_to_wrapper
+from .._types import numba_type_to_wrapper, prepare_specialization
 from ._core import NumbaMlirCoreAdapter
 
 
@@ -129,7 +129,7 @@ def _block_exchange(
     Normalize block dimensions, numeric dtype, extent, and optional scatter
     types. Select the expected plain, ranked, or flagged registration from the
     mode. Build shared-core separate-input/output semantics, adapt its types
-    and scratch ABI, and return the materialized invocable.
+    and scratch ABI, and return the materialized specialization.
 
     The caller supplies output storage as an operand. This host factory does
     not allocate the per-thread result or perform a device exchange.
@@ -185,7 +185,7 @@ def _block_exchange(
         ),
         extra_type_definitions=(numba_type_to_wrapper(dtype),),
     )
-    return make_invocable_from_specialization(specialization)
+    return prepare_specialization(specialization)
 
 
 def exchange(
@@ -197,7 +197,7 @@ def exchange(
     valid_flag_dtype=None,
     warp_time_slicing=False,
 ):
-    """Build an unranked out-of-place BlockExchange invocable."""
+    """Build an unranked out-of-place BlockExchange specialization."""
 
     return _block_exchange(
         exchange,
@@ -220,7 +220,7 @@ def exchange_ranked(
     valid_flag_dtype=None,
     warp_time_slicing=False,
 ):
-    """Build a ranked out-of-place BlockExchange invocable."""
+    """Build a ranked out-of-place BlockExchange specialization."""
 
     return _block_exchange(
         exchange_ranked,
@@ -243,7 +243,7 @@ def exchange_flagged(
     valid_flag_dtype=None,
     warp_time_slicing=False,
 ):
-    """Build a ranked and flagged out-of-place BlockExchange invocable."""
+    """Build a ranked and flagged out-of-place BlockExchange specialization."""
 
     return _block_exchange(
         exchange_flagged,
@@ -272,7 +272,7 @@ def _warp_exchange(
     fixed item count. Match the factory registration to layout conversion or
     ranked scatter, then adapt the shared-core warp algorithm.
 
-    Pass both logical width and block shape to invocable construction so it
+    Pass both logical width and block shape to specialization construction so it
     can arrange storage for each warp instance. Input and output remain
     separate runtime arrays owned by the caller.
     """
@@ -316,7 +316,7 @@ def _warp_exchange(
         ),
         extra_type_definitions=(numba_type_to_wrapper(dtype),),
     )
-    return make_invocable_from_specialization(
+    return prepare_specialization(
         specialization,
         logical_warp_threads=threads_in_warp,
         block_threads=block_dim,
@@ -331,7 +331,7 @@ def warp_exchange(
     mode="striped_to_blocked",
     rank_dtype=None,
 ):
-    """Build an unranked physical or logical WarpExchange invocable."""
+    """Build an unranked physical or logical WarpExchange specialization."""
 
     return _warp_exchange(
         warp_exchange,
@@ -352,7 +352,7 @@ def warp_exchange_ranked(
     mode="scatter_to_striped",
     rank_dtype=None,
 ):
-    """Build a ranked physical or logical WarpExchange invocable."""
+    """Build a ranked physical or logical WarpExchange specialization."""
 
     return _warp_exchange(
         warp_exchange_ranked,

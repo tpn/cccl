@@ -42,8 +42,8 @@ from .._compiler._parameters import (
 from .._semantic import _normalize_numba_callable, _numba_semantic_token
 from .._types import (
     BoundedInteger,
-    make_invocable_from_specialization,
     numba_type_to_wrapper,
+    prepare_specialization,
 )
 from ._core import NumbaMlirCoreAdapter, _optional_binding
 
@@ -212,8 +212,9 @@ def _block_reduce(
 
     Runtime prefix counts use a bounded int32 conversion between one and the
     block size. Adapt the shared-core algorithm with that scalar ABI,
-    registered scratch metadata, and dtype support, then return an invocable.
-    The callable returns the native scalar result with CUB's root visibility.
+    registered scratch metadata, and dtype support, then return its source
+    specialization. The generated provider returns the native scalar result
+    with CUB's root visibility.
     """
 
     if threads_per_block is None:
@@ -281,7 +282,7 @@ def _block_reduce(
         **_provider_metadata(provider_factory, namespace="block"),
         extra_type_definitions=(numba_type_to_wrapper(dtype),),
     )
-    return make_invocable_from_specialization(specialization)
+    return prepare_specialization(specialization)
 
 
 def sum(
@@ -292,7 +293,7 @@ def sum(
     algorithm: Any = "warp_reductions",
     num_valid: Any = None,
 ) -> Any:
-    """Build a direct CUB BlockReduce Sum invocable."""
+    """Build a direct CUB BlockReduce Sum specialization."""
 
     return _block_reduce(
         sum,
@@ -314,7 +315,7 @@ def block_reduce_builtin(
     algorithm: Any = "warp_reductions",
     num_valid: Any = None,
 ) -> Any:
-    """Build a direct CUB BlockReduce invocable with a C++ operator."""
+    """Build a direct CUB BlockReduce specialization with a C++ operator."""
 
     return _block_reduce(
         block_reduce_builtin,
@@ -337,7 +338,7 @@ def reduce(
     algorithm: Any = "warp_reductions",
     num_valid: Any = None,
 ) -> Any:
-    """Build a direct CUB BlockReduce invocable with a callback."""
+    """Build a direct CUB BlockReduce specialization with a callback."""
 
     return _block_reduce(
         reduce,
@@ -371,7 +372,7 @@ def _warp_reduce(
     Specialize the core algorithm at the logical width, then materialize it
     with the registered warp scratch and synchronization contract.
 
-    Supply both logical width and enclosing block shape to invocable
+    Supply both logical width and enclosing block shape to specialization
     construction so each warp instance gets its own scratch. The native result
     is meaningful at the group's root.
     """
@@ -435,7 +436,7 @@ def _warp_reduce(
         **_provider_metadata(provider_factory, namespace="warp"),
         extra_type_definitions=(numba_type_to_wrapper(dtype),),
     )
-    return make_invocable_from_specialization(
+    return prepare_specialization(
         specialization,
         logical_warp_threads=threads_in_warp,
         block_threads=block_dim,
@@ -450,7 +451,7 @@ def warp_sum(
     items_per_thread: int = 1,
     value_kind: str | None = None,
 ) -> Any:
-    """Build a direct CUB WarpReduce Sum invocable."""
+    """Build a direct CUB WarpReduce Sum specialization."""
 
     return _warp_reduce(
         warp_sum,
@@ -472,7 +473,7 @@ def warp_reduce_builtin(
     items_per_thread: int = 1,
     value_kind: str | None = None,
 ) -> Any:
-    """Build a direct CUB WarpReduce invocable with a C++ operator."""
+    """Build a direct CUB WarpReduce specialization with a C++ operator."""
 
     return _warp_reduce(
         warp_reduce_builtin,
@@ -495,7 +496,7 @@ def warp_reduce(
     items_per_thread: int = 1,
     value_kind: str | None = None,
 ) -> Any:
-    """Build a direct CUB WarpReduce invocable with a callback."""
+    """Build a direct CUB WarpReduce specialization with a callback."""
 
     return _warp_reduce(
         warp_reduce,

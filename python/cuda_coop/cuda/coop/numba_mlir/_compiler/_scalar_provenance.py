@@ -10,21 +10,17 @@ operation, but a value explicitly typed as ``int64`` must not silently become
 already attached to it. Here, "provenance" means the constants, arguments, and
 forwarding assignments that establish both facts.
 
-Group planning and call rewriting share this analysis when deciding whether a
-control such as ``offset`` or ``oob_default`` can be embedded in generated
-code. The static-value resolver accepts only explicit constants and literal
-arguments whose possible definitions agree; it does not evaluate runtime
-expressions to make them static. Separate helpers infer result types for
-scalar operators, casts, and CUDA indices so runtime values can still be
-checked against an operation's numeric requirements. Neither analysis rewrites
-the function IR or requests a new compiler specialization.
+The typed pipeline uses this analysis to decide whether a control such as
+``offset`` or ``oob_default`` can be embedded in generated code. The resolver
+accepts only explicit constants and literal arguments whose possible
+definitions agree; it does not evaluate runtime expressions to make them
+static, rewrite the function IR, or request a new compiler specialization.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 import numba_cuda_mlir.numba_cuda.types as _numba_types
@@ -63,22 +59,6 @@ def _static_scalar(
     if dtype is None and isinstance(value, np.generic):
         dtype = value.dtype
     return StaticScalarProvenance(value=value, dtype=dtype)
-
-
-def _typed_static_value(scalar: StaticScalarProvenance) -> Any:
-    """Unwrap a static value while retaining its known numeric width.
-
-    Use a NumPy scalar for a compiler dtype when conversion is supported.
-    Return the original value if conversion fails. Callers that must validate
-    the recorded dtype should keep the provenance object itself.
-    """
-
-    if scalar.dtype is None or isinstance(scalar.value, np.generic):
-        return scalar.value
-    try:
-        return np.dtype(str(scalar.dtype)).type(scalar.value)
-    except (TypeError, ValueError, OverflowError):
-        return scalar.value
 
 
 def try_resolve_static_scalar_provenance(
@@ -207,130 +187,6 @@ def try_resolve_static_scalar_provenance(
     ):
         return (False, None)
     return (True, first)
-
-
-def try_resolve_static_scalar(
-    value: object,
-    *,
-    definitions: Callable[[ir.Var], Iterable[object]],
-    argument_type: Callable[[int], _numba_types.Type | None],
-    seen: set[str] | None = None,
-) -> tuple[bool, Any]:
-    """Resolve a static value and preserve a known scalar width when possible.
-
-    Use ``try_resolve_static_scalar_provenance`` to require agreement across
-    all reaching definitions without evaluating runtime expressions. Unwrap
-    its result, converting a value with a known compiler dtype to the matching
-    NumPy scalar when possible. If that conversion is unsupported or fails,
-    return the original value. Use the provenance-returning helper when the
-    recorded dtype itself is needed for validation.
-
-    Parameters
-    ----------
-    value : object
-        IR value or already-static Python value to resolve.
-    definitions : callable
-        Return all reaching definitions for an IR variable.
-    argument_type : callable
-        Return the compiler type for a function argument index, or ``None``
-        when unavailable.
-    seen : set of str, optional
-        Names on the current recursion path. The provenance resolver adds
-        the current variable in place and copies the set for each branch.
-
-    Returns
-    -------
-    resolved : bool
-        Whether the value has consistent, explicitly static provenance.
-    value : object
-        Unwrapped static value, or ``None`` on failure. Consult ``resolved``
-        to distinguish an unresolved value from a statically known ``None``.
-    """
-
-    resolved, scalar = try_resolve_static_scalar_provenance(
-        value,
-        definitions=definitions,
-        argument_type=argument_type,
-        seen=seen,
-    )
-    return (resolved, None if scalar is None else _typed_static_value(scalar))
-
-
-def scalar_expression_dtype(
-    definition: ir.Expr,
-    dtype: Callable[[ir.Var], object],
-) -> _numba_types.Type | None:
-    """Infer an operator's result from the known scalar operand types.
-
-    Accept a binary, in-place binary, or unary IR expression. Delegate to the
-    compiler's scalar operator rules; unknown or unsupported typing returns
-    ``None``. This query determines a type without evaluating the expression.
-    """
-
-    from ._parameters import _scalar_operator_result_dtype
-
-    if definition.op in {"binop", "inplace_binop"}:
-        operands = (definition.lhs, definition.rhs)
-    else:
-        operands = (definition.value,)
-    return _scalar_operator_result_dtype(
-        definition.fn,
-        *(
-            dtype(value) if isinstance(value, ir.Var) else None
-            for value in operands
-        ),
-    )
-
-
-def scalar_call_dtype(
-    function: object,
-    arguments: Sequence[object],
-    dtype: Callable[[ir.Var], object],
-) -> _numba_types.Type | None:
-    """Infer the result type of a recognized scalar cast.
-
-    For one IR argument, try the compiler's scalar typing rules first. Fall
-    back to the cast's declared dtype when operand typing gives no result.
-    Return ``None`` for an unrecognized cast; this does not infer arbitrary
-    function return types or validate the whole call signature.
-    """
-
-    from ._parameters import _scalar_cast_dtype, _scalar_operator_result_dtype
-
-    cast_dtype = _scalar_cast_dtype(function)
-    if cast_dtype is None:
-        return None
-    if len(arguments) == 1 and isinstance(arguments[0], ir.Var):
-        inferred = _scalar_operator_result_dtype(function, dtype(arguments[0]))
-        if inferred is not None:
-            return inferred
-    return cast_dtype
-
-
-def cuda_index_dtype(
-    definition: ir.Expr,
-    attribute_chain: Callable[[ir.Var], tuple[object, Sequence[str]] | None],
-    cuda_module: ModuleType,
-) -> _numba_types.Type | None:
-    """Recognize CUDA index and dimension components as ``int32``.
-
-    Accept x, y, or z of blockDim, blockIdx, gridDim, or threadIdx only when
-    the attribute chain starts at the supplied CUDA module object. Unrelated
-    objects with the same attribute names return ``None``.
-    """
-
-    if definition.op != "getattr":
-        return None
-    chain = attribute_chain(definition.value)
-    if chain is not None:
-        root, attributes = chain
-        if root is cuda_module and (*attributes, definition.attr) in {
-            (index, component)
-            for index in ("blockDim", "blockIdx", "gridDim", "threadIdx")
-            for component in ("x", "y", "z")
-        }:
-            return _numba_types.int32
-    return None
 
 
 __all__: tuple[str, ...] = ()

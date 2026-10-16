@@ -30,10 +30,7 @@ from ._marker import group_primitive_marker
 _ItemT = TypeVar("_ItemT", bound=CommonNumericScalar)
 
 
-@group_operation(
-    "reduce_batched",
-    family_module="cuda.coop.numba_mlir._compiler._group_reduce_batched",
-)
+@group_operation("reduce_batched")
 def reduce_batched(
     group: WarpGroup,
     value: CommonThreadDataLike[_ItemT] | numpy.ndarray,

@@ -4,31 +4,21 @@
 
 """Record what the typed pipeline did, for tests and for reading.
 
-Call resolution reports each kernel it resolves to ``record``. Two consumers
-read those records:
-
-* ``capture()`` collects them while a test compiles a kernel, so the test
-  can check the plan and the typed IR with FileCheck;
-* ``CUDA_COOP_NUMBA_MLIR_PIPELINE_PRINT`` prints them to standard error as
-  each kernel compiles. It takes a comma-separated list of ``plan`` and
-  ``ir``, in the spirit of LLVM's ``-print-after``.
+Call resolution reports each kernel it resolves to ``record``. ``capture()``
+collects the records while a test compiles a kernel, so the test can check
+the plan and the typed IR with FileCheck.
 """
 
 from __future__ import annotations
 
 import contextlib
-import os
 import re
-import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
 from . import _bridges as nb
 from ._plan import KernelPlan, format_plan
-
-PRINT_ENVIRONMENT_VARIABLE = "CUDA_COOP_NUMBA_MLIR_PIPELINE_PRINT"
-
 
 _ADDRESS = re.compile(r" at 0x[0-9a-fA-F]+")
 _MODULE_PATH = re.compile(r"<module '([^']+)' from '[^']*'>")
@@ -95,19 +85,13 @@ def capture() -> Iterator[Capture]:
         _active.remove(cap)
 
 
-def _print_requests() -> set[str]:
-    value = os.environ.get(PRINT_ENVIRONMENT_VARIABLE, "")
-    return {part.strip() for part in value.split(",") if part.strip()}
-
-
 def record(plan: KernelPlan, func_ir: Any, typemap: dict) -> None:
-    """Report a kernel to active captures and to the print switch.
+    """Report a kernel to active captures.
 
     Call this once call resolution has finished rewriting ``func_ir``.
     """
 
-    requests = _print_requests()
-    if not _active and not requests:
+    if not _active:
         return
     rec = KernelRecord(
         plan,
@@ -116,14 +100,9 @@ def record(plan: KernelPlan, func_ir: Any, typemap: dict) -> None:
     )
     for cap in _active:
         cap.kernels.append(rec)
-    if "plan" in requests:
-        print(rec.plan_text, file=sys.stderr, end="")
-    if "ir" in requests:
-        print(rec.typed_ir_text, file=sys.stderr, end="")
 
 
 __all__ = [
-    "PRINT_ENVIRONMENT_VARIABLE",
     "Capture",
     "KernelRecord",
     "capture",

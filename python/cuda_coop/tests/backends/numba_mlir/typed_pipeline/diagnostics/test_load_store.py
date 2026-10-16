@@ -18,9 +18,7 @@ from cuda import coop
 from cuda.coop.numba_mlir._pipeline import testing
 from cuda.coop.numba_mlir._pipeline._errors import TypedPipelineError
 
-from .._support import BLOCK, CHIP, f32_in_out, requires_typed_pipeline
-
-pytestmark = requires_typed_pipeline
+from .._support import BLOCK, CHIP, f32_in_out
 
 
 def _compile(kernel, signature=None, block=BLOCK):

@@ -31,10 +31,7 @@ from ._marker import group_primitive_marker
 _ItemT = TypeVar("_ItemT", bound=CommonNumericScalar)
 
 
-@group_operation(
-    "reduce",
-    family_module="cuda.coop.numba_mlir._compiler._group_reduce",
-)
+@group_operation("reduce")
 def reduce(
     group: BlockGroup | WarpGroup,
     value: CommonThreadDataLike[_ItemT] | _ItemT | numpy.ndarray,
@@ -108,10 +105,7 @@ def reduce(
     )
 
 
-@group_operation(
-    "sum",
-    family_module="cuda.coop.numba_mlir._compiler._group_reduce",
-)
+@group_operation("sum")
 def sum(
     group: BlockGroup | WarpGroup,
     value: CommonThreadDataLike[_ItemT] | _ItemT | numpy.ndarray,

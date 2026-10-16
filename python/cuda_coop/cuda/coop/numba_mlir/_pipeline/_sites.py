@@ -14,9 +14,9 @@ change the IR. For each kernel it:
 * checks that write-only payloads agree on their dtype, and that every read
   of a payload typed to its final dtype;
 * reads the extent of a ``cuda.coop.numba_mlir`` call's ``cuda.local.array``
-  payload from its constructor's shape, as coop's planner does;
+  payload from its constructor's shape;
 * binds each site's ``valid_items``, ``oob_default`` and ``offset`` as
-  static or runtime by where the value comes from, as coop's planner does,
+  static or runtime by where the value comes from,
   and checks them and any scalar ``store`` value by coop's rules;
 * builds each site's dims-free request with its controls;
 * measures the kernel's own static shared memory.
@@ -216,8 +216,8 @@ class _Analysis:
     def _provenance(self, var: Any) -> Any:
         """Return ``var``'s static provenance, or ``_RUNTIME``.
 
-        A value is static when coop's planner would call it static: it
-        comes, through aliases, casts and phis, from a constant, a global, a
+        A static value comes, through aliases, casts and phis,
+        from a constant, a global, a
         free variable or a literal argument.
         """
 
@@ -237,11 +237,10 @@ class _Analysis:
         return scalar if resolved else _RUNTIME
 
     def _controls(self, stmt, kind: str, dtype: Any) -> tuple:
-        """Bind the site's controls as coop's planner binds them.
+        """Bind and validate the site's scalar controls.
 
-        Checks follow the planner's ``_rewrite_load_store``: static
-        ``valid_items`` and ``offset`` first, then the integer types of
-        runtime ones, then ``oob_default`` against the payload dtype.
+        Check static ``valid_items`` and ``offset`` first, then the integer
+        types of runtime ones, then ``oob_default`` against the payload dtype.
         """
 
         from ..._core import ArgumentBinding
@@ -332,7 +331,7 @@ class _Analysis:
         return tuple(controls)
 
     def _store_scalar(self, stmt, kind: str, dtype: Any) -> Scalar | None:
-        """Check a scalar ``store`` value as coop's planner does.
+        """Check a scalar ``store`` value against its destination.
 
         A static value converts to the destination's dtype under coop's
         scalar rules; a runtime value must already have that dtype exactly.
@@ -370,7 +369,7 @@ class _Analysis:
     def _array_extent(self, stmt, kind: str) -> int | None:
         """Return the extent of a plain-array payload, read from the IR.
 
-        As in coop's planner, the payload must come, through aliases, from
+        The payload must come, through aliases, from
         ``cuda.local.array`` calls with a constant integer shape, and they
         must agree. Return ``None`` for a payload that is not a plain array.
         """

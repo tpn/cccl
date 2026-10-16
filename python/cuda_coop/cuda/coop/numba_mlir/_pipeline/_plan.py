@@ -11,9 +11,8 @@ Numba IR, so it is the part of the resolution a second host compiler could
 share.
 
 ``format_plan`` renders a plan as stable text. Tests check that text with
-FileCheck, and ``CUDA_COOP_NUMBA_MLIR_PIPELINE_PRINT=plan`` prints it for
-each compiled kernel. The format names sites by program order and source
-line, never by object identity or symbol digest, so it does not change
+FileCheck through ``capture()``. The format names sites by program order and
+source line, never by object identity or symbol digest, so it does not change
 between runs, processes or targets.
 """
 

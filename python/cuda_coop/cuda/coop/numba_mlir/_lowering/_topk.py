@@ -24,7 +24,7 @@ from .._compiler._parameters import (
     _validate_common_numeric_dtype,
     normalize_dim_param,
 )
-from .._types import make_invocable_from_specialization
+from .._types import prepare_specialization
 from ._core import NumbaMlirCoreAdapter
 
 
@@ -47,7 +47,7 @@ def _topk(
     Its wrapper keeps runtime counts wide until it validates them.
 
     Use the calling factory's registered storage and synchronization metadata
-    when materializing the specialization. Return an invocable that modifies
+    when materializing the specialization. Return a specialization that modifies
     its array operands in place; the public rewrite owns their initial copies.
     """
 
@@ -78,7 +78,7 @@ def _topk(
         execution_scope=metadata.execution_scope,
         synchronization_scope=metadata.synchronization_scope,
     )
-    return make_invocable_from_specialization(specialization)
+    return prepare_specialization(specialization)
 
 
 def topk_keys(**kwargs):

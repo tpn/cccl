@@ -2,12 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-"""Compile neighbor overloads and inferred result chains without a GPU.
-
-Only device-capability queries are replaced. The real compiler and linker
-still process the provider wrappers and the runtime count trap. Invalid
-Adjacent Difference options must fail compilation.
-"""
+"""Compile adjacent operations with inferred payload types."""
 
 import os
 from types import SimpleNamespace
@@ -15,13 +10,11 @@ from types import SimpleNamespace
 import pytest
 
 pytest.importorskip("numba_cuda_mlir")
+
 import numba_cuda_mlir.tools as numba_mlir_tools
 from numba_cuda_mlir import cuda, types
 
 from cuda import coop
-from cuda.coop.numba_mlir import _types
-from cuda.coop.numba_mlir._compiler import _nvrtc
-from cuda.coop.numba_mlir._lowering import _neighbors
 
 pytestmark = [pytest.mark.backend_numba_mlir, pytest.mark.compile]
 
@@ -41,66 +34,6 @@ def _fixed_device(monkeypatch):
         "get_gpu_compute_capability",
         lambda as_type=str: (9, 0) if as_type is tuple else "sm_90",
     )
-
-
-@pytest.mark.parametrize("operation", ["adjacent_difference", "discontinuity"])
-def test_all_numeric_provider_overloads(operation):
-    """Link valid modes together to expose overload or symbol conflicts."""
-
-    variants = []
-    context = _nvrtc.resolve_compile_context()
-    modes = (
-        ("left", "right")
-        if operation == "adjacent_difference"
-        else ("heads", "tails", "heads_and_tails")
-    )
-    for dtype in (
-        types.int8,
-        types.uint8,
-        types.int16,
-        types.uint16,
-        types.int32,
-        types.uint32,
-        types.int64,
-        types.uint64,
-        types.float32,
-        types.float64,
-    ):
-        for mode in modes:
-            configurations = [(False, False, False)]
-            if mode in {"left", "heads", "heads_and_tails"}:
-                configurations.append((False, True, False))
-            if mode in {"right", "tails", "heads_and_tails"}:
-                configurations.append((False, False, True))
-            if mode == "heads_and_tails":
-                configurations.append((False, True, True))
-            if operation == "adjacent_difference":
-                configurations.append((True, False, False))
-                if mode == "left":
-                    configurations.append((True, True, False))
-            for partial, predecessor, successor in configurations:
-                with _types.collect_specializations() as collected:
-                    getattr(
-                        _neighbors,
-                        "block_"
-                        + operation
-                        + ("_both" if mode == "heads_and_tails" else ""),
-                    )(
-                        dtype=dtype,
-                        threads_per_block=(5, 3, 2),
-                        items_per_thread=3,
-                        mode=mode,
-                        partial=partial,
-                        predecessor=predecessor,
-                        successor=successor,
-                    )
-                collected[0]._compile_context = context
-                variants.extend(collected)
-    ltoir = _types.prepare_ltoir_bundle(
-        variants,
-        allow_single=True,
-    )
-    assert ltoir
 
 
 def _compile(kernel, signature):

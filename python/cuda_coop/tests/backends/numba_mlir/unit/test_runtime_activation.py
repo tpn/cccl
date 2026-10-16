@@ -51,26 +51,9 @@ def test_numba_first_root_import_automatically_activates_backend():
 
         expected = {
             "cuda.coop.numba_mlir",
-            "cuda.coop.numba_mlir._compiler._planner",
+            "cuda.coop.numba_mlir._pipeline",
         }
         assert expected <= set(sys.modules), expected - set(sys.modules)
-        """
-    )
-
-
-def test_numba_first_root_import_does_not_require_refresh_registries():
-    _run_import_probe(
-        """
-        import sys
-
-        import numba_cuda_mlir
-        import numba_cuda_mlir.extending as extending
-
-        del extending.refresh_registries
-        import cuda.coop  # noqa: F401
-
-        assert "cuda.coop.numba_mlir" in sys.modules
-        assert numba_cuda_mlir.__version__.startswith("0.5.")
         """
     )
 
@@ -98,7 +81,7 @@ def test_root_first_qualified_import_explicitly_activates_backend():
 
         expected = {
             "cuda.coop.numba_mlir",
-            "cuda.coop.numba_mlir._compiler._planner",
+            "cuda.coop.numba_mlir._pipeline",
         }
         assert expected <= set(sys.modules), expected - set(sys.modules)
         """
@@ -127,15 +110,13 @@ def test_root_first_register_explicitly_activates_backend_once(
 
         expected = {{
             "cuda.coop.numba_mlir",
-            "cuda.coop.numba_mlir._compiler._planner",
+            "cuda.coop.numba_mlir._pipeline",
         }}
         assert expected <= set(sys.modules), expected - set(sys.modules)
 
         from numba_cuda_mlir._whole_function_planners import _planner_registry
         from numba_cuda_mlir.numba_cuda.core.rewrites import rewrite_registry
-        from cuda.coop.numba_mlir._compiler._planner import (
-            CoopWholeFunctionPlanner,
-        )
+        from cuda.coop.numba_mlir._pipeline._resolve import CoopCallResolution
 
         from cuda.coop.numba_mlir._compiler._activation import (
             _initialize_runtime_hooks,
@@ -148,12 +129,13 @@ def test_root_first_register_explicitly_activates_backend_once(
         assert [
             planner for planner in _planner_registry._planners
             if planner.__module__.startswith("cuda.coop.")
-        ] == [CoopWholeFunctionPlanner]
-        assert not any(
-            rewrite.__module__.startswith("cuda.coop.")
+        ] == []
+        assert [
+            rewrite
             for rewrites in rewrite_registry.rewrites.values()
             for rewrite in rewrites
-        )
+            if rewrite.__module__.startswith("cuda.coop.")
+        ] == [CoopCallResolution]
         """
     )
 
@@ -188,53 +170,6 @@ def test_scan_annotations_preserve_lazy_stateful_function_loading():
     )
 
 
-def test_reduce_providers_load_only_during_reduce_planning():
-    _run_import_probe(
-        """
-        import sys
-        from types import SimpleNamespace
-
-        from numba_cuda_mlir import types
-        from numba_cuda_mlir.numba_cuda.compiler import run_frontend
-
-        from cuda import coop as common
-        import cuda.coop.numba_mlir as qualified
-        from cuda.coop.numba_mlir._compiler._group_planner import _GroupCallPlanner
-        from cuda.coop.numba_mlir._compiler._operations import _FACTORY_OPERATIONS
-
-        provider_module = "cuda.coop.numba_mlir._lowering._reduce"
-
-        def reduce_factories():
-            return {
-                factory
-                for factory in _FACTORY_OPERATIONS
-                if factory.__module__ == provider_module
-            }
-
-        assert provider_module not in sys.modules
-        assert callable(common.reduce)
-        assert callable(common.sum)
-        assert callable(qualified.reduce)
-        assert callable(qualified.sum)
-        assert provider_module not in sys.modules
-        assert not reduce_factories()
-
-        def kernel(value):
-            return qualified.sum(qualified.this_block(), value)
-
-        func_ir = run_frontend(kernel)
-        planner = _GroupCallPlanner(
-            SimpleNamespace(func_ir=func_ir, args=(types.int32,)),
-            {"block": (64, 1, 1), "grid": (1, 1, 1), "cluster": None},
-        )
-        assert provider_module not in sys.modules
-        assert planner.run()
-        assert provider_module in sys.modules
-        assert reduce_factories()
-        """  # noqa: E501 - Preserve embedded source bytes.
-    )
-
-
 def test_runtime_loading_retries_after_a_failed_qualified_import(monkeypatch):
     runtime = object()
     error = _activation.NumbaMlirBackendImportError(
@@ -254,7 +189,7 @@ def test_runtime_loading_retries_after_a_failed_qualified_import(monkeypatch):
 
 
 @pytest.mark.parametrize("error_type", ["RuntimeError", "AttributeError"])
-def test_failed_planner_import_can_retry_without_partial_registration(
+def test_failed_pipeline_import_can_retry_without_partial_registration(
     error_type,
 ):
     _run_import_probe(
@@ -273,17 +208,17 @@ def test_failed_planner_import_can_retry_without_partial_registration(
         baseline = dict(typeof_impl.registry)
         real_import_module = importlib.import_module
         fail_once = True
-        injected_error = ERROR_TYPE("injected planner import failure")
+        injected_error = ERROR_TYPE("injected pipeline import failure")
 
-        def fail_after_planner_import(name, package=None):
+        def fail_after_pipeline_import(name, package=None):
             global fail_once
             module = real_import_module(name, package)
-            if fail_once and name.endswith("._compiler._planner"):
+            if fail_once and name.endswith("._pipeline"):
                 fail_once = False
                 raise injected_error
             return module
 
-        importlib.import_module = fail_after_planner_import
+        importlib.import_module = fail_after_pipeline_import
         try:
             import cuda.coop.numba_mlir  # noqa: F401
         except ERROR_TYPE as error:
@@ -305,15 +240,15 @@ def test_failed_planner_import_can_retry_without_partial_registration(
         assert dict(typeof_impl.registry) == baseline
 
         import cuda.coop.numba_mlir  # noqa: F401
-        from cuda.coop.numba_mlir._compiler._planner import (
-            CoopWholeFunctionPlanner,
-        )
+        from cuda.coop.numba_mlir._pipeline._resolve import CoopCallResolution
 
         assert [
             planner for planner in _planner_registry._planners
             if planner.__module__.startswith("cuda.coop.")
-        ] == [CoopWholeFunctionPlanner]
-        assert dict(typeof_impl.registry) == baseline
+        ] == []
+        assert CoopCallResolution in (
+            rewrite_registry.rewrites["after-inference"]
+        )
         """.replace("ERROR_TYPE", error_type)
     )
 
@@ -326,7 +261,7 @@ def test_failed_planner_import_can_retry_without_partial_registration(
     ],
 )
 @pytest.mark.parametrize(
-    "version", ["0.4.9", "0.5.0rc1", "0.6.0rc1", "0.6.0", "invalid", None]
+    "version", ["0.4.9", "0.5.0", "0.5.3", "0.5.5", "0.6.0", "invalid", None]
 )
 def test_backend_registration_rejects_unsupported_runtime_version(
     activate, version
@@ -357,9 +292,9 @@ def test_backend_registration_rejects_unsupported_runtime_version(
             assert exc.backend == "numba-cuda-mlir"
             assert exc.reason_code == "unsupported-runtime-version"
             assert exc.details["detected_version"] == VERSION
-            assert exc.details["required_version"] == ">=0.5.0,<0.6"
+            assert exc.details["required_version"] == "==0.5.4"
             message = str(exc)
-            assert "numba-cuda-mlir>=0.5.0,<0.6" in message
+            assert "numba-cuda-mlir==0.5.4" in message
             assert "cuda-coop[numba-cuda-mlir-cu12]" in message
             assert "cuda-coop[numba-cuda-mlir-cu13]" in message
             if VERSION is not None:
@@ -368,14 +303,14 @@ def test_backend_registration_rejects_unsupported_runtime_version(
             raise AssertionError("unsupported runtime unexpectedly activated")
 
         assert "numba_cuda_mlir.cuda" not in sys.modules
-        assert "cuda.coop.numba_mlir._compiler._planner" not in sys.modules
+        assert "cuda.coop.numba_mlir._pipeline" not in sys.modules
         """.replace("ACTIVATE_BACKEND", activate).replace(
             "VERSION", repr(version)
         )
     )
 
 
-@pytest.mark.parametrize("version", ["0.5.0+local", "0.5.1rc1", None])
+@pytest.mark.parametrize("version", ["0.5.4"])
 def test_backend_registration_accepts_supported_runtime_version(version):
     _run_import_probe(
         f"""
@@ -396,7 +331,7 @@ def test_backend_registration_accepts_supported_runtime_version(version):
         from cuda import coop
 
         coop.register("numba-cuda-mlir")
-        assert "cuda.coop.numba_mlir._compiler._planner" in sys.modules
+        assert "cuda.coop.numba_mlir._pipeline" in sys.modules
         """
     )
 
@@ -448,7 +383,7 @@ def test_root_import_warns_when_an_old_runtime_was_already_imported():
         assert len(caught) == 1, caught
         assert caught[0].category is CudaCoopAutoRegistrationWarning
         assert "0.4.9" in str(caught[0].message)
-        assert "numba-cuda-mlir>=0.5.0,<0.6" in str(caught[0].message)
+        assert "numba-cuda-mlir==0.5.4" in str(caught[0].message)
         assert "cuda.coop.numba_mlir" not in sys.modules
         assert "numba_cuda_mlir.cuda" not in sys.modules
         """
@@ -465,7 +400,7 @@ def test_missing_packaging_is_reported_before_compiler_import():
 
         os.environ["CUDA_COOP_DISABLE_AUTO_DSL_REGISTRATION"] = "1"
         runtime = ModuleType("numba_cuda_mlir")
-        runtime.__version__ = "0.5.0"
+        runtime.__version__ = "0.5.4"
         sys.modules[runtime.__name__] = runtime
         missing = ModuleNotFoundError(
             "No module named 'packaging'", name="packaging"
@@ -497,7 +432,7 @@ def test_missing_packaging_is_reported_before_compiler_import():
             )
 
         assert "numba_cuda_mlir.cuda" not in sys.modules
-        assert "cuda.coop.numba_mlir._compiler._planner" not in sys.modules
+        assert "cuda.coop.numba_mlir._pipeline" not in sys.modules
         """
     )
 
@@ -537,7 +472,7 @@ def test_backend_registration_reports_a_missing_public_runtime(activate):
             assert exc.details["missing"] == "numba_cuda_mlir"
             assert isinstance(exc.__cause__, ImportError)
             message = str(exc)
-            assert "numba-cuda-mlir>=0.5.0" in message
+            assert "numba-cuda-mlir==0.5.4" in message
             assert "cuda-coop[numba-cuda-mlir-cu12]" in message
             assert "cuda-coop[numba-cuda-mlir-cu13]" in message
         else:

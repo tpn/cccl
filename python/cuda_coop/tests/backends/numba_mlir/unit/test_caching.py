@@ -12,6 +12,7 @@ import textwrap
 from types import SimpleNamespace
 
 import pytest
+from numba_cuda_mlir import types
 
 from cuda.coop.numba_mlir import _types
 from cuda.coop.numba_mlir._compiler import _caching
@@ -185,20 +186,20 @@ def test_layout_cache_identity(monkeypatch, tmp_path):
 
 
 def test_symbol_hash_uses_numba_type_identity():
-    assert _numba_semantic_token(_types.types.int32) == _numba_semantic_token(
+    assert _numba_semantic_token(types.int32) == _numba_semantic_token(
         (
             "numba-cuda-mlir-type",
-            type(_types.types.int32).__module__,
-            type(_types.types.int32).__qualname__,
+            type(types.int32).__module__,
+            type(types.int32).__qualname__,
             "int32",
         )
     )
     int32 = hashlib.sha1()
-    _types._hash_symbol_value(int32, _types.types.int32)
+    _types._hash_symbol_value(int32, types.int32)
     another_int32 = hashlib.sha1()
-    _types._hash_symbol_value(another_int32, _types.types.int32)
+    _types._hash_symbol_value(another_int32, types.int32)
     float32 = hashlib.sha1()
-    _types._hash_symbol_value(float32, _types.types.float32)
+    _types._hash_symbol_value(float32, types.float32)
 
     assert int32.digest() == another_int32.digest()
     assert int32.digest() != float32.digest()
@@ -206,10 +207,10 @@ def test_symbol_hash_uses_numba_type_identity():
 
 def test_numba_type_tokens_remain_distinct():
     values = (
-        _types.types.int32,
-        _types.types.float32,
-        _types.types.float64,
-        _types.types.uint32,
+        types.int32,
+        types.float32,
+        types.float64,
+        types.uint32,
     )
     tokens = tuple(_numba_semantic_token(value) for value in values)
 

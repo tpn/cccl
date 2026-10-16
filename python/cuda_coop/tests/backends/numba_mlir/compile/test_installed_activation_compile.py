@@ -127,9 +127,9 @@ _COMPILE_PROBE = textwrap.dedent(
     public_scan_module = "cuda.coop.numba_mlir._group._scan"
     compiler_scan_module = "cuda.coop.numba_mlir._compiler._group_scan"
     stateful_function_module = "cuda.coop.numba_mlir._stateful_function"
-    assert public_reduce_module not in sys.modules
+    assert public_reduce_module in sys.modules
     assert compiler_reduce_module not in sys.modules
-    assert public_scan_module not in sys.modules
+    assert public_scan_module in sys.modules
     assert compiler_scan_module not in sys.modules
     assert stateful_function_module not in sys.modules
 

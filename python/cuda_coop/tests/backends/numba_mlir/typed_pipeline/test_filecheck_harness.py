@@ -12,10 +12,6 @@ from __future__ import annotations
 
 import pytest
 
-from ._support import requires_typed_pipeline
-
-pytestmark = requires_typed_pipeline
-
 
 def _copy_kernel():
     from numba_cuda_mlir import cuda
@@ -34,7 +30,7 @@ def _signature():
     return types.void(types.float32[::1], types.float32[::1])
 
 
-def test_plan_of_a_kernel_without_coop_calls():
+def test_plan_without_coop_calls():
     from cuda.coop.numba_mlir._pipeline import testing
 
     testing.check(

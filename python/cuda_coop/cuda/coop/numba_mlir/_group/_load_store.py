@@ -35,10 +35,7 @@ from .._thread_group import BlockGroup, WarpGroup
 from ._marker import group_primitive_marker
 
 
-@group_operation(
-    "load",
-    family_module="cuda.coop.numba_mlir._compiler._group_load_store",
-)
+@group_operation("load")
 def load(
     group: BlockGroup | WarpGroup,
     source: object,
@@ -93,10 +90,7 @@ def load(
     )
 
 
-@group_operation(
-    "store",
-    family_module="cuda.coop.numba_mlir._compiler._group_load_store",
-)
+@group_operation("store")
 def store(
     group: BlockGroup | WarpGroup,
     destination: object,

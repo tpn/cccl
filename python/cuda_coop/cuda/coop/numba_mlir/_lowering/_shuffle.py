@@ -5,9 +5,10 @@
 """Materialize scalar and array CUB BlockShuffle providers.
 
 These host factories translate shared-core descriptions into Numba-CUDA-MLIR
-invocables. Scalar Offset and Rotate return a value and may consume a runtime
-distance. Array Up and Down write a caller-supplied output payload with no
-distance operand. Both providers declare block scratch and synchronization.
+specializations. Scalar Offset and Rotate return a value and may consume a
+runtime distance. Array Up and Down write a caller-supplied output payload
+with no distance operand. Both providers declare block scratch and
+synchronization.
 """
 
 from __future__ import annotations
@@ -35,8 +36,8 @@ from .._compiler._parameters import (
 )
 from .._types import (
     BoundedInteger,
-    make_invocable_from_specialization,
     numba_type_to_wrapper,
+    prepare_specialization,
 )
 from ._core import NumbaMlirCoreAdapter, _optional_binding
 
@@ -139,7 +140,7 @@ def shuffle_scalar(
     Offset, or unsigned 32 bits in ``[1, block_threads - 1]`` for Rotate.
 
     Materialize the core algorithm with the registered block scratch ABI and
-    return its invocable. The adapter supplies the distance conversion; the
+    return its specialization. The adapter supplies the distance conversion; the
     group planner supplies any preceding runtime-value preparation.
     """
 
@@ -179,7 +180,7 @@ def shuffle_scalar(
         **_provider_metadata(shuffle_scalar, operation="shuffle_scalar"),
         extra_type_definitions=(numba_type_to_wrapper(dtype),),
     )
-    return make_invocable_from_specialization(specialization)
+    return prepare_specialization(specialization)
 
 
 def shuffle_array(
@@ -192,7 +193,7 @@ def shuffle_array(
 
     Normalize block shape, numeric dtype, and item count, then adapt the
     shared-core unit-shift overload to the registered block scratch ABI.
-    Return an invocable that writes the supplied output array; allocation and
+    Return a specialization writing the supplied output array; allocation and
     the public return alias are arranged by group planning and rewriting.
     """
 
@@ -220,7 +221,7 @@ def shuffle_array(
         **_provider_metadata(shuffle_array, operation="shuffle_array"),
         extra_type_definitions=(numba_type_to_wrapper(dtype),),
     )
-    return make_invocable_from_specialization(specialization)
+    return prepare_specialization(specialization)
 
 
 for _factory, _operation in (

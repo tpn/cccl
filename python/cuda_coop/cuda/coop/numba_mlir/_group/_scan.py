@@ -38,10 +38,7 @@ _PrefixStateT = TypeVar("_PrefixStateT", bound=CommonNumericScalar)
 _ItemT = TypeVar("_ItemT", bound=CommonNumericScalar)
 
 
-_FAMILY_MODULE = "cuda.coop.numba_mlir._compiler._group_scan"
-
-
-@group_operation("scan", family_module=_FAMILY_MODULE)
+@group_operation("scan")
 def scan(
     group: BlockGroup | WarpGroup,
     value: CommonThreadDataLike[_ItemT] | _ItemT | numpy.ndarray,
@@ -155,7 +152,7 @@ def scan(
     )
 
 
-@group_operation("exclusive_scan", family_module=_FAMILY_MODULE)
+@group_operation("exclusive_scan")
 def exclusive_scan(
     group: BlockGroup | WarpGroup,
     value: CommonThreadDataLike[_ItemT] | _ItemT | numpy.ndarray,
@@ -212,7 +209,7 @@ def exclusive_scan(
     )
 
 
-@group_operation("inclusive_scan", family_module=_FAMILY_MODULE)
+@group_operation("inclusive_scan")
 def inclusive_scan(
     group: BlockGroup | WarpGroup,
     value: CommonThreadDataLike[_ItemT] | _ItemT | numpy.ndarray,
@@ -267,7 +264,7 @@ def inclusive_scan(
     )
 
 
-@group_operation("exclusive_sum", family_module=_FAMILY_MODULE)
+@group_operation("exclusive_sum")
 def exclusive_sum(
     group: BlockGroup | WarpGroup,
     value: CommonThreadDataLike[_ItemT] | _ItemT | numpy.ndarray,
@@ -322,7 +319,7 @@ def exclusive_sum(
     )
 
 
-@group_operation("inclusive_sum", family_module=_FAMILY_MODULE)
+@group_operation("inclusive_sum")
 def inclusive_sum(
     group: BlockGroup | WarpGroup,
     value: CommonThreadDataLike[_ItemT] | _ItemT | numpy.ndarray,

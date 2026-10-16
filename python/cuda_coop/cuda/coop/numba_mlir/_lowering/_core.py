@@ -13,8 +13,7 @@ and a runtime valid-item count can require checked integer narrowing.
 The adapter also carries scratch and synchronization requirements into source
 generation. It creates a specialized algorithm description. Python callback
 operators compile their LTO IR during specialization. The provider wrappers
-compile later in ``make_invocable_from_specialization`` or after several
-descriptions have been collected for a shared compilation.
+compile later in the typed pipeline's shared translation unit.
 """
 
 from __future__ import annotations
@@ -536,7 +535,7 @@ class NumbaMlirCoreAdapter(CoreBackendAdapter):
         ``LEADING_POINTER`` storage, translate type declarations, and finish
         template substitution. Specializing a Python operator compiles its
         callback LTO IR here. Provider-wrapper compilation and linking occur
-        later when an invocable or shared compilation is materialized.
+        later when the typed pipeline compiles its shared translation unit.
 
         Parameters
         ----------

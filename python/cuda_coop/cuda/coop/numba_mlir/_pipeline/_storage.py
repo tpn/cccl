@@ -7,7 +7,7 @@
 Storage analysis is the third stage of ``CoopCallResolution``, and the only
 place the typed pipeline calls NVRTC. It compiles the kernel's providers in
 one bundle (``_link``), which also reports each provider's scratch size and
-alignment, and lays scratch out as coop's planner does: one implicit region
+alignment, and lays scratch out in one implicit region
 sized to the largest need, backed by one static ``cuda.shared.array``
 that, with the kernel's own shared memory, fits the 48 KB static limit.
 
