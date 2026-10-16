@@ -6,6 +6,10 @@
 Histogram
 =========
 
+Both Numba-CUDA-MLIR and CUTLASS implement Histogram. The
+:ref:`CuTe example <coop-cutlass-histogram>` uses the same striped counter
+layout and input-preservation contract as the Numba examples below.
+
 :func:`cuda.coop.histogram` counts how many samples fall in each bin. Each
 sample is already an integer bin index; the operation does not divide a
 numeric range into intervals. It returns fresh counter payloads and
