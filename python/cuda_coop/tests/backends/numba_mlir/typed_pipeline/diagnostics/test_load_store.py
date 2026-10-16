@@ -145,25 +145,6 @@ def test_writes_that_disagree_without_coop_evidence():
         _compile(kernel)
 
 
-def test_a_read_typed_before_the_payload_dtype_was_known():
-    def kernel(source, output):
-        block = coop.this_block()
-        items = coop.ThreadData(4)
-        items[0] = 1
-        first = items[0]
-        coop.load(block, source, items)
-        output[cuda.threadIdx.x] = first
-
-    with pytest.raises(
-        TypedPipelineError,
-        match=(
-            r"'items': a read at line \d+ typed as float64, but the payload's "
-            r"dtype is float32\. Pass dtype=float32"
-        ),
-    ):
-        _compile(kernel)
-
-
 def test_a_coop_call_in_a_separate_device_function():
     @cuda.jit(device=True, inline="never")
     def load_into(source, items):

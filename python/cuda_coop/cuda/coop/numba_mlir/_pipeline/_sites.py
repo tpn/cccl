@@ -11,8 +11,9 @@ change the IR. For each kernel it:
 * collects the cooperative call sites in program order;
 * refuses cooperative calls inside functions compiled as separate device
   functions (``targetoptions["device"]``), which have no launch;
-* checks that write-only payloads agree on their dtype, and that every read
-  of a payload typed to its final dtype;
+* checks that every read of a payload typed to its final dtype (that
+  write-only payloads agree on their dtype is a typing rule,
+  ``_payload_rules.writes_agree``);
 * reads the extent of a ``cuda.coop.numba_mlir`` call's ``cuda.local.array``
   payload from its constructor's shape, as coop's planner does;
 * binds each site's ``valid_items``, ``oob_default`` and ``offset`` as
@@ -43,7 +44,7 @@ from ._templates import (
     request_for,
     with_controls,
 )
-from ._types import WRITE, ThreadDataType
+from ._types import ThreadDataType
 
 
 @dataclass(frozen=True)
@@ -83,27 +84,6 @@ _RUNTIME = object()
 
 
 # Checks -----------------------------------------------------------------------
-
-
-def _check_write_agreement(func_ir: Any, typemap: dict) -> None:
-    """Payloads typed only by indexed writes must agree on the dtype."""
-
-    written: dict[str, set] = {}
-    for block in func_ir.blocks.values():
-        for stmt in block.body:
-            if isinstance(stmt, (nb.ir.SetItem, nb.ir.StaticSetItem)):
-                ty = typemap.get(stmt.target.name)
-                if isinstance(ty, ThreadDataType) and ty.strength == WRITE:
-                    written.setdefault(stmt.target.name, set()).add(
-                        nb.unliteral(typemap[stmt.value.name])
-                    )
-    for name, dtypes in written.items():
-        if dtypes != {typemap[name].dtype}:
-            found = ", ".join(sorted(map(str, dtypes)))
-            raise TypedPipelineError(
-                f"coop.ThreadData {name!r}: its writes disagree on the dtype "
-                f"({found}). Pass dtype= or make the writes agree."
-            )
 
 
 def _check_reads(func_ir: Any, typemap: dict) -> None:
@@ -452,7 +432,6 @@ def analyze(
                 "instead of inline='never'."
             )
         return None
-    _check_write_agreement(func_ir, typemap)
     _check_reads(func_ir, typemap)
     sites = tuple(analysis.site(*f) for f in found)
     return Sites(sites, _user_static_shared_bytes(func_ir, typemap, calltypes))

@@ -27,6 +27,7 @@ owners = (
     typeinfer.CallConstraint,
     typeinfer.StaticGetItemConstraint,
     typeinfer.BuildTupleConstraint,
+    typeinfer.TypeInferer,
 )
 before = [dict(vars(owner)) for owner in owners]
 """
@@ -50,10 +51,12 @@ PATCHED = [
     "BuildTupleConstraint.__call__",
     "BuildTupleConstraint.refine",
     "CallConstraint.refine",
+    "CallConstraint.resolve",
     "LocalArrayTemplate.generic",
     "Propagate.__call__",
     "StaticGetItemConstraint.__call__",
     "StaticGetItemConstraint.refine",
+    "TypeInferer.propagate",
 ]
 
 
@@ -125,9 +128,9 @@ def test_apply_is_idempotent():
 
 @pytest.mark.skipif(TYPED, reason="checks the pins without applying them")
 def test_the_pins_match_the_installed_compiler():
-    from cuda.coop.numba_mlir._pipeline import _ncm_patches
+    from cuda.coop.numba_mlir._pipeline import _ncm_patches, _typing_rules
 
-    for patch in _ncm_patches.PATCHES:
+    for patch in (*_ncm_patches.PATCHES, _typing_rules.ENGINE):
         _ncm_patches.check(patch)
 
 
