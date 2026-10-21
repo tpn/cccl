@@ -38,7 +38,6 @@ SynchronizableGroupKind: TypeAlias = Literal[
     "block",
     "cluster",
     "threads_within_warp",
-    "warps_within_block",
 ]
 BlockLoadStoreAlgorithm: TypeAlias = Literal[
     "direct",
@@ -55,6 +54,70 @@ WarpLoadStoreAlgorithm: TypeAlias = Literal[
     "transpose",
 ]
 LoadStoreAlgorithm: TypeAlias = BlockLoadStoreAlgorithm | WarpLoadStoreAlgorithm
+ReduceAlgorithm: TypeAlias = Literal[
+    "raking_commutative_only",
+    "raking",
+    "warp_reductions",
+]
+ScanAlgorithm: TypeAlias = Literal["raking", "raking_memoize", "warp_scans"]
+ReduceOperator: TypeAlias = Literal[
+    "+",
+    "sum",
+    "add",
+    "plus",
+    "*",
+    "mul",
+    "multiply",
+    "multiplies",
+    "min",
+    "minimum",
+    "max",
+    "maximum",
+    "&",
+    "bit_and",
+    "|",
+    "bit_or",
+    "^",
+    "bit_xor",
+]
+SumScanOperator: TypeAlias = Literal["+", "sum", "add", "plus"]
+NonSumScanOperator: TypeAlias = Literal[
+    "*",
+    "mul",
+    "multiply",
+    "multiplies",
+    "min",
+    "minimum",
+    "max",
+    "maximum",
+    "&",
+    "bit_and",
+    "|",
+    "bit_or",
+    "^",
+    "bit_xor",
+]
+ScanOperator: TypeAlias = SumScanOperator | NonSumScanOperator
+ScanMode: TypeAlias = Literal["exclusive", "inclusive"]
+ExchangeMode: TypeAlias = Literal[
+    "striped_to_blocked",
+    "blocked_to_striped",
+]
+BlockExchangeMode: TypeAlias = (
+    ExchangeMode
+    | Literal[
+        "warp_striped_to_blocked",
+        "blocked_to_warp_striped",
+        "scatter_to_blocked",
+        "scatter_to_striped",
+        "scatter_to_striped_guarded",
+        "scatter_to_striped_flagged",
+    ]
+)
+WarpExchangeMode: TypeAlias = ExchangeMode
+CommonShuffleMode: TypeAlias = Literal["down", "up"]
+ScalarShuffleMode: TypeAlias = Literal["offset", "rotate"]
+ShuffleMode: TypeAlias = CommonShuffleMode | ScalarShuffleMode
 TempStorageSharing: TypeAlias = Literal["shared", "exclusive"]
 
 class CompilerScalarLike(Protocol):
@@ -90,6 +153,22 @@ CommonNumericScalar: TypeAlias = (
 )
 
 _CommonNumericT = TypeVar("_CommonNumericT", bound=CommonNumericScalar)
+
+class _ExactScalar(Protocol[_ItemT]):
+    """Match a seed's exact scalar type without widening the input type.
+
+    The writable ``__class__`` member makes the type parameter invariant, so
+    a seed cannot widen the input type. Invariance also keeps NumPy float64,
+    a float subclass, out of the Python ``float`` arm. The separate ``int``
+    and ``float`` arms let ``ContextualInitialValue`` accept ordinary Python
+    literals. The compiler still checks literal values and runtime dtypes.
+    """
+
+    __class__: type[_ItemT]  # type: ignore[assignment]
+
+ContextualInitialValue: TypeAlias = (
+    _ExactScalar[_ItemT] | _ExactScalar[int] | _ExactScalar[float]
+)
 _ReadableItemT_co = TypeVar(
     "_ReadableItemT_co", bound=CommonNumericScalar, covariant=True
 )
@@ -97,6 +176,21 @@ ScalarValue: TypeAlias = (
     bool | int | float | complex | numpy.number | CompilerScalarLike
 )
 IntegerValue: TypeAlias = int | numpy.integer[Any] | CompilerIntegerLike
+SignedIntegerScalar: TypeAlias = (
+    int | numpy.signedinteger[Any] | CompilerIntegerLike
+)
+IntegralScalar: TypeAlias = SignedIntegerScalar | numpy.unsignedinteger[Any]
+ThreadGroupQueryScalar: TypeAlias = (
+    numpy.int8
+    | numpy.uint8
+    | numpy.int16
+    | numpy.uint16
+    | numpy.int32
+    | numpy.uint32
+    | numpy.int64
+    | numpy.uint64
+    | CompilerIntegerLike
+)
 TraceInteger: TypeAlias = int | numpy.integer[Any]
 ValidItems: TypeAlias = IntegerValue
 
@@ -154,14 +248,37 @@ class TempStorageLike(Protocol):
     auto_sync: bool
     sharing: TempStorageSharing
 
+    def reserve(
+        self, num_elems: int, dtype: object, *, alignment: int | None = None
+    ) -> Any:
+        """Reserve a compiler shared array with manual synchronization."""
+
+    def release(self, dtype: object | None = None) -> Any:
+        """Consume the descriptor and return its complete shared array."""
+
 __all__ = [
+    "BlockExchangeMode",
     "BlockLoadStoreAlgorithm",
+    "CommonShuffleMode",
+    "ContextualInitialValue",
+    "ExchangeMode",
     "LoadStoreAlgorithm",
+    "NonSumScanOperator",
+    "ReduceAlgorithm",
+    "ReduceOperator",
+    "ScalarShuffleMode",
+    "ScanAlgorithm",
+    "ScanMode",
+    "ScanOperator",
+    "ShuffleMode",
+    "SumScanOperator",
+    "SynchronizableGroupKind",
     "TempStorageLike",
     "TempStorageSharing",
     "ThreadDataLike",
     "ThreadGroupKind",
     "ThreadLevel",
+    "WarpExchangeMode",
     "WarpLoadStoreAlgorithm",
     "_CommonNumericT",
 ]

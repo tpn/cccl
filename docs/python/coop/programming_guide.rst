@@ -8,7 +8,7 @@
 ===============================
 
 ``cuda.coop`` lets threads cooperate inside a Python GPU kernel. You can
-load a tile, operate on its per-thread values, and write the result
+load a tile, compute a prefix sum across its elements, and write the result
 without leaving the kernel. You choose the participating group and the data
 each thread contributes.
 
@@ -45,19 +45,39 @@ covered by CI. Before reusing compiled kernels, check the
 :ref:`device and context-lifetime rules <coop-numba-context-lifetime>` and
 :ref:`disk-cache behavior <coop-numba-kernel-cache>`.
 
-A first kernel: copying a tile
---------------------------------
+A first kernel: prefix sums within tiles
+----------------------------------------
 
-The :func:`cuda.coop.load` reference contains a complete, tested copy kernel,
-including allocation, launch, partial-tile handling, and an output check.
-All threads participate in Load and Store, while ``valid_items`` selects the
-valid prefix of the final tile. The examples below use these imports:
+An exclusive prefix sum gives each element the sum of earlier elements.
+For ``[3, 1, 4, 2]``, the result is ``[0, 3, 4, 8]``.
+The kernel below computes a separate exclusive sum for each tile of
+``128 * items_per_thread`` elements. Each block has 128 threads; the host
+passes the number of elements per thread to the kernel.
 
-.. code-block:: python
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_programming_guide_examples.py
+   :language: python
+   :name: coop-pg-first-kernel
+   :start-after: # coop-pg-first-kernel-begin
+   :end-before: # coop-pg-first-kernel-end
+   :dedent: 4
 
-   import numpy as np
-   from numba_cuda_mlir import cuda, types
-   from cuda import coop
+All threads in a block execute the Load, Scan, and Store. The final block
+still launches 128 threads even when its tile is only partly filled.
+Load fills the unused slots with zero, and Store writes only the valid
+prefix. Zero contributes nothing to the sum.
+
+Each block starts its sum at zero. For one prefix sum spanning the entire
+array, you also need to carry the totals between tiles. A later example
+does that while one block processes successive tiles. A scan distributed
+across independently scheduled blocks needs a device-wide algorithm.
+
+The host code copies input to the GPU once and copies the result back for
+checking. Keep arrays on the device when several kernels use them. The
+first launch also compiles the kernel; allow for that when measuring time.
+For empty input, skip the launch.
+
+The remaining examples reuse the imports above. Each kernel example includes
+its own input and result check.
 
 .. _coop-programming-api-choice:
 
@@ -79,9 +99,12 @@ backend; CUTLASS support is planned.
 
 The qualified import selects the Numba-CUDA-MLIR API explicitly:
 
-.. code-block:: python
-
-   import cuda.coop.numba_mlir as numba_coop
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_programming_guide_examples.py
+   :language: python
+   :name: coop-pg-qualified-import
+   :start-after: # coop-pg-qualified-import-begin
+   :end-before: # coop-pg-qualified-import-end
+   :dedent: 4
 
 Both imports can be used in the same program. This guide uses ``coop`` for
 common calls and ``numba_coop`` for qualified calls so the choice is visible.
@@ -102,9 +125,64 @@ several operations:
      - ``ThreadData``; scalar inputs where the operation accepts them
      - Also accepts fixed local arrays in supported array operations;
        exposes ``local`` and ``shared`` memory namespaces
+   * - Reduction or scan operator
+     - Built-in string operators such as ``"sum"`` and ``"max"``
+     - Also accepts supported Python operators and device callbacks;
+       callback restrictions depend on the operation and group
+   * - Extra Scan results or prefixes
+     - Inclusive and exclusive results, including an exclusive initial value
+     - Also supports ``aggregate_output``, partial Warp Scan, and Block
+       Scan prefix callbacks
+   * - Layout exchange
+     - Blocked-to-striped and striped-to-blocked conversion
+     - Also supports block scatter and warp-striped layouts, with optional
+       warp time slicing where supported
+   * - Shifting values
+     - Unit ``up`` and ``down`` shifts of a block's ``ThreadData`` tile
+     - Also supports scalar block ``offset`` and ``rotate`` modes
+   * - Comparison sorting
+     - Ascending or descending Merge Sort of keys or key-value pairs
+     - Also accepts a custom ``compare_op`` and fixed local arrays
+   * - Radix sorting and ranking
+     - Integer-key sorting and digit ranks
+     - Also supports floating-point sorting, striped sort output,
+       digit-prefix output, scalars, and fixed local arrays
+   * - Neighbor comparisons
+     - Adjacent differences and head/tail flags with tile boundary controls
+     - Also accepts stateless ``difference_op`` and ``flag_op`` callbacks
+   * - Histograms
+     - Fresh striped counters from fixed integer sample payloads
+     - Also accepts one scalar sample per thread
+   * - Run Length Decode
+     - A decoded window, or bulk decoding into an array
+     - Also supports relative run offsets, window total output, and a
+       selected unsigned decoded-offset dtype
+   * - Batched warp reductions
+     - One built-in reduction per payload slot, with distributed results
+     - Also accepts a stateless device reduction callback
    * - Load/Store algorithms and explicit scratch
      - String algorithm selectors and ``TempStorage`` on supported block calls
      - Same shared controls; qualifying the import is unnecessary for these
+
+For example, suppose you need both the exclusive sum and each tile's total.
+The qualified Scan can produce both in one call. Each thread keeps its
+input values in ``ThreadData`` and receives the total through a separate
+one-item payload:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_programming_guide_examples.py
+   :language: python
+   :name: coop-pg-qualified-scan
+   :start-after: # coop-pg-qualified-scan-begin
+   :end-before: # coop-pg-qualified-scan-end
+   :dedent: 4
+
+This version assumes full tiles. The NumPy arrays in this and subsequent
+small examples use Numba's host-array transfer support at the launch boundary.
+
+``aggregate_output`` holds the reduction of the input tile. An exclusive
+initial value is excluded from that aggregate. You could obtain a total
+with a separate common API reduction, but the qualified call is useful when
+you already need a scan and want its aggregate as well.
 
 The common API defines backend-independent contracts. You must still
 check that the selected backend implements the requested group, dtype, and
@@ -172,22 +250,125 @@ configuration and lifetime.
 Groups: which threads cooperate
 -------------------------------
 
-
 A group defines the participants in an operation. ``this_block()`` uses
-all threads in the current block; ``this_warp()`` uses a complete physical
-warp of 32 threads. ``this_warp().group_by(8)`` partitions it into four
-consecutive logical warps of eight threads. The compiler obtains the block
-shape from the kernel launch; the group factories take no size arguments.
+the current block; ``this_warp()`` uses the current physical warp of 32
+threads. The compiler obtains the launch dimensions from the kernel launch.
+The group factories take no size arguments.
 
-Load and Store support blocks, physical warps, and logical warp widths of
-1, 2, 4, 8, 16, or 32. Warp operations require a block size divisible by 32.
-The partition width is a compile-time constant. Every member of a
-participating group must reach the same primitive invocation.
+The hierarchy vocabulary includes the following groups. Availability of a
+descriptor and availability of a primitive on that descriptor are separate
+parts of the API.
 
-The common API also declares other hierarchy descriptors. Their presence
-does not imply executable operations or queries on those scopes in this
-backend.
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
 
+   * - Expression
+     - Participants
+     - Current use
+   * - ``coop.this_thread()``
+     - One thread
+     - Hierarchy queries
+   * - ``coop.this_warp()``
+     - One physical warp
+     - Load, Store, Exchange, Reduce, scalar Scan, Merge Sort, and Batched
+       Reduction
+   * - ``coop.this_warp().group_by(8)``
+     - Eight consecutive lanes within a physical warp
+     - Logical-warp forms of those operations
+   * - ``coop.this_block()``
+     - All threads in the block
+     - Load, Store, Exchange, Shuffle, Reduce, Scan, Merge Sort, Radix Sort,
+       Radix Rank, TopK, Adjacent Difference, Discontinuity, Histogram,
+       and Run Length Decode
+   * - ``coop.this_block().group_by(2)``
+     - Two consecutive physical warps
+     - Hierarchy queries
+   * - ``coop.this_cluster()``
+     - Blocks in the launch's cluster
+     - Hierarchy queries with supported hardware and cluster launch facts
+   * - ``coop.this_grid()``
+     - The kernel grid
+     - Hierarchy queries; grid primitives and grid synchronization
+       are unavailable
+
+``group_by`` counts units in the next inner hierarchy level: threads for a
+warp parent, physical warps for a block parent. Thus
+``this_block().group_by(2)`` describes 64 threads. For logical Warp
+primitives, choose a width of 1, 2, 4, 8, 16, or 32. Use a block size
+divisible by 32 for these Warp operations; the last physical warp must be
+complete. Nested ``group_by`` calls are unsupported.
+
+The count and ``exhaustive`` flag are compile-time constants. By default,
+the partition must cover the parent exactly. A non-exhaustive partition
+can leave a remainder. For instance, partitioning a 96-thread block into
+pairs of warps leaves the last warp outside a complete group.
+``is_member()`` identifies participating threads. Guard queries that require
+membership for excluded threads, and check the primitive's participation
+requirements before using that guard around an operation.
+
+Mapped groups of physical warps support hierarchy queries through their
+immediate parent block. Primitives and group barriers are unavailable for these
+groups. Use the block and logical-warp forms for the examples in this guide.
+
+.. _coop-group-queries:
+
+Ranks and sizes
+^^^^^^^^^^^^^^^
+
+``group.rank()`` gives the calling thread's rank within the group;
+``group.count()`` gives the number of threads in it. Ranks start at zero.
+For a multidimensional block, the linear thread rank is
+``x + blockDim.x * (y + blockDim.y * z)``.
+
+The optional ``level`` argument lets you query the hierarchy in other units.
+For a 128-thread block:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Query
+     - Meaning
+   * - ``block.rank("thread")``
+     - Calling thread's linear rank, 0 through 127
+   * - ``block.count("thread")``
+     - 128 threads
+   * - ``block.rank("warp")``
+     - Calling warp's rank in the block, 0 through 3
+   * - ``block.count("warp")``
+     - Four physical warps
+   * - ``block.rank("grid")``
+     - This block's linear rank in the grid
+   * - ``block.count("grid")``
+     - Number of blocks in the grid
+
+Queries accept ``thread`` (also ``gpu_thread``), ``warp``, ``block``,
+``cluster``, and ``grid`` where the relationship is supported. Mapped groups
+can query their constituents and immediate physical parent. Queries above
+that parent are rejected.
+
+Results normally use unsigned 32-bit integers; queries involving the grid
+use unsigned 64-bit integers. ``rank_as`` and ``count_as`` take an explicit
+integer dtype, for example ``block.rank_as(types.int32)``. A signed result
+can be convenient for address calculations involving subtraction; choose a
+type large enough for the launch.
+
+Independent scans within eight-lane groups
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Suppose each row has eight values. One logical warp can scan each row,
+giving four independent row scans per physical warp:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_programming_guide_examples.py
+   :language: python
+   :name: coop-pg-row-scan
+   :start-after: # coop-pg-row-scan-begin
+   :end-before: # coop-pg-row-scan-end
+   :dedent: 4
+
+Warp Scan accepts one scalar per lane. Block Scan also accepts multiple
+items per thread. The row example has exactly enough threads for the input;
+a more general kernel must handle its final rows explicitly.
 
 .. _coop-participation:
 
@@ -206,8 +387,11 @@ per-element condition. For a partial Load, supply ``valid_items`` and
 them. An early return by some block threads has the same problem if the
 remaining threads later execute a block primitive.
 
-Use ``cuda.syncthreads()`` for explicit block synchronization in
-Numba kernels. Every thread in the block must reach the barrier.
+``group.sync()`` provides a barrier for supported groups. Every member must
+reach it. ``sync_aligned()`` has the additional requirement that the group
+be aligned and converged; use ``sync()`` unless your code establishes that
+stronger precondition. For explicit block synchronization in Numba kernels,
+``cuda.syncthreads()`` is also available.
 
 An operation's scratch-reuse barrier protects its temporary storage.
 Automatic synchronization inserts a trailing barrier after each call that
@@ -216,7 +400,6 @@ every member must still reach the primitive and its barrier.
 Arrange synchronization for your own shared-memory communication as well.
 Constructing a group or a ``ThreadData`` object does not synchronize threads.
 
-
 .. _coop-thread-data:
 
 ``ThreadData``: the part of a tile owned by one thread
@@ -224,8 +407,8 @@ Constructing a group or a ``ThreadData`` object does not synchronize threads.
 
 ``coop.ThreadData(items_per_thread)`` gives each thread that many slots.
 With 128 threads, the group owns ``128 * items_per_thread`` values. Each
-thread indexes its own slots with ``items[i]``. Each thread accesses only
-its own slots.
+thread indexes only its own slots with ``items[i]``. To move values between
+threads, use an operation such as Exchange, Shuffle, or Scan.
 
 :class:`~cuda.coop.ThreadDataLike` names the common payload interface used
 in API signatures. It describes the item count, dtype, and indexed reads and
@@ -285,6 +468,9 @@ For group size ``G``, items per thread ``K``, thread rank ``t``, and local
 item index ``i``, blocked order uses tile position ``t * K + i``.
 Striped order uses ``t + i * G``.
 
+Block Scan interprets an array payload in blocked order. If you loaded it
+with the striped algorithm, exchange it into blocked order first. Choosing
+the transpose Load algorithm performs that rearrangement as part of Load.
 
 The payload does not carry a runtime layout tag that corrects mismatched
 operations. The algorithms you call determine the interpretation. Pairing
@@ -300,6 +486,7 @@ Dtypes and storage
 The current numeric payload types are signed and unsigned integers of 8,
 16, 32, or 64 bits, and 32- or 64-bit floating point. Boolean, half
 precision, complex, and structured payloads are outside this contract.
+Bitwise operators require integer values.
 
 Leave the constructor's element type unspecified for normal use. Load infers
 it from the source, and Store can establish it from the destination.
@@ -312,6 +499,12 @@ Conflicting type requirements are errors. See :ref:`element-type inference
 Load writes into the payload supplied by the caller. Transpose Store
 algorithms may rearrange their input payload in place, as in CUB. Copy values
 before Store if they are needed later. Both operations return ``None``.
+Array Scan, Exchange, array Shuffle, Merge Sort, array Radix Sort, array Radix
+Rank, TopK, Adjacent Difference, Discontinuity, Histogram, windowed Run Length
+Decode, and Batched Reduction return fresh payloads, so their input values
+remain available afterwards. Reduce returns a scalar, including when each
+thread contributes several items. Bulk Run Length Decode writes the caller's
+destination and returns the total decoded size.
 
 Numba can promote integer arithmetic. Store requires an exact match to the
 destination dtype, so cast computed values when necessary, as in the
@@ -394,6 +587,41 @@ measure alternatives with the actual dtype, item count, and surrounding
 work. Coalesced accesses can justify rearrangement costs, but the best
 choice depends on the kernel.
 
+An explicit layout conversion
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Exchange converts per-thread values between blocked and striped layouts.
+For example, ``striped_to_blocked`` lets a striped Load feed an operation
+that expects consecutive values in each thread. The logical tile order
+stays the same. Use ``blocked_to_striped`` for the reverse conversion.
+
+This kernel loads striped data, exchanges it into blocked order, and then
+computes the inclusive sum in the original array order:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_programming_guide_examples.py
+   :language: python
+   :name: coop-pg-exchange
+   :start-after: # coop-pg-exchange-begin
+   :end-before: # coop-pg-exchange-end
+   :dedent: 4
+
+Qualified block scatter modes let you supply destination ranks for finer
+control. Valid ranks and unique active destinations are caller requirements;
+duplicate destinations and holes leave unspecified slots.
+
+The :doc:`Exchange visualization <visualizations/exchange>` shows both
+layout conversions and ranked scatters, including the holes left by
+suppressed writes.
+
+Shuffle operates on a block's flattened blocked tile. The common ``up``
+and ``down`` modes shift it by one element and return a fresh payload.
+The first ``up`` slot or last ``down`` slot is unspecified. Set that
+boundary yourself before consuming it. Qualified scalar ``offset`` and
+``rotate`` modes have different distance rules; see :doc:`../coop_api`
+before substituting them for an array shift.
+
+Use the :doc:`Shuffle visualization <visualizations/shuffle>` to compare
+the array shifts with scalar offsets and rotation.
 
 Warp tile addresses
 ^^^^^^^^^^^^^^^^^^^
@@ -498,8 +726,8 @@ synchronization, and allocation sharing. The active compiler backend must
 recognize the descriptor.
 
 An explicit descriptor lets several supported block calls reuse an
-allocation. Its contents are opaque; keep application values in
-``ThreadData`` or your own arrays.
+allocation. Its contents are opaque during cooperative use. After the last
+such use, ``release()`` hands the region to application code as a shared array.
 
 .. list-table::
    :header-rows: 1
@@ -508,10 +736,36 @@ allocation. Its contents are opaque; keep application values in
      - Scratch behavior in the current backend
    * - Direct, striped, or vectorize Load/Store
      - No shared scratch or reuse barrier
-   * - Block transpose-family Load/Store
+   * - Block transpose-family Load/Store; Block Reduce; Block Scan; Block Merge Sort;
+       Block Radix Sort; TopK; Adjacent Difference; Discontinuity; Histogram;
+       Run Length Decode (windowed or bulk)
      - Automatic scratch, or an explicit ``TempStorage``
-   * - Warp transpose Load/Store
+   * - Warp transpose Load/Store; Warp Reduce; Warp Scan; Warp Merge Sort;
+       Batched Warp Reduction
      - Automatic scratch per group; explicit descriptors are rejected
+   * - Exchange and Shuffle
+     - Compiler-owned scratch and reuse synchronization
+   * - Radix Rank
+     - Compiler-owned block scratch and reuse synchronization
+
+Reusing scratch across operations
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This version of a tile scan shares one descriptor between the transpose
+Load, Scan, and transpose Store, with ``auto_sync=True`` to synchronize reuse:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_programming_guide_examples.py
+   :language: python
+   :name: coop-pg-shared-scratch
+   :start-after: # coop-pg-shared-scratch-begin
+   :end-before: # coop-pg-shared-scratch-end
+   :dedent: 4
+
+The planner sizes and aligns the shared allocation for its uses. The Load
+finishes using scratch before Scan reuses it, and Scan finishes before
+Store begins using it. Automatic block barriers enforce that ordering.
+The loaded values and the returned prefixes remain in their per-thread
+payloads while scratch is reused.
 
 Capacity, alignment, and lifetime
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -537,8 +791,15 @@ launch accounting. The compiler may reuse its scratch across compatible calls
 and inserts the required reuse barriers.
 
 With the default ``auto_sync=False``, the kernel must provide reuse barriers.
-Put an explicit block barrier before a later call reuses the same scratch,
-including between loop iterations.
+For example, this kernel uses explicit block barriers after each storage-using
+call, including between loop iterations:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_programming_guide_examples.py
+   :language: python
+   :name: coop-pg-manual-scratch
+   :start-after: # coop-pg-manual-scratch-begin
+   :end-before: # coop-pg-manual-scratch-end
+   :dedent: 4
 
 Set ``auto_sync=True`` to insert automatic trailing barriers for scratch
 reuse. Without an explicit descriptor, the compiler synchronizes scratch
@@ -550,8 +811,97 @@ restriction reflects what the planner can establish; it does not mean that
 every rejected program necessarily races.
 
 Scratch lasts for the kernel's execution on that block. It cannot carry
-state between blocks or kernel launches. Keep persistent application state
-in a separate payload.
+state between blocks or kernel launches. For running scan state within a
+block, use a separate payload as in the prefix-callback example below.
+
+Numba-CUDA-MLIR also supports typed reservations for application data and
+device libraries:
+
+.. code-block:: python
+
+   scratch = coop.TempStorage()
+   our_smem_chunk = scratch.reserve(128, types.float32, alignment=32)
+
+Here ``types`` is imported from ``numba_cuda_mlir``. The element count and
+integer, floating-point, or complex scalar dtype must be known during
+compilation. The result is an ordinary one-dimensional shared array that
+supports indexing and can be passed to
+device functions accepting arrays. Compilation replaces the reservation with
+an aligned typed view of the planner's shared backing; there is no runtime
+allocator.
+
+Reservations inherit the descriptor's ``sharing`` policy. With the default
+``sharing="shared"``, reservations and primitive scratch from the same
+descriptor alias one region sized and aligned for their largest requirements.
+Place a barrier between phases that reuse that region and complete any
+asynchronous library operations first. When a primitive reads values from an
+aliased reservation, load each thread's input into registers and synchronize
+the block before calling the primitive. With ``sharing="exclusive"``, each
+primitive and reservation call site receives a separate region. Different
+descriptors always have separate storage. Use separate descriptors or
+``sharing="exclusive"`` for buffers whose contents remain live simultaneously.
+Executing a call site again reuses its region. Explicit capacity must cover
+the selected layout, including alignment padding for exclusive slices.
+
+A descriptor used with ``reserve()`` must have ``auto_sync=False`` or
+``auto_sync=None``. The compiler rejects ``auto_sync=True``, including uses
+through aliases and inlined helpers. Synchronize application accesses and
+follow each device library's completion and release requirements. A separate
+descriptor used only for cooperative primitives may still enable automatic
+synchronization.
+
+The runnable :download:`nvmath FFT example
+<../../../python/cuda_coop/examples/numba_mlir/nvmath_fft.py>` reserves scratch
+for ``fft.execute()`` and application data alongside a cooperative reduction.
+The :download:`nvmath and NVSHMEM example
+<../../../python/cuda_coop/examples/numba_mlir/nvmath_nvshmem.py>` also reserves
+NVSHMEM communication scratch and explicitly registers and releases it.
+See the :download:`example instructions
+<../../../python/cuda_coop/examples/numba_mlir/README.md>` for dependencies and
+launch commands. These libraries receive ordinary arrays or pointers into the
+reserved regions; they do not need to understand ``TempStorage``.
+
+Handing scratch to application code
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``storage.release(dtype=None)`` consumes the descriptor and returns a native
+one-dimensional shared array spanning its complete planned region. The default
+dtype is unsigned bytes. A compile-time numeric dtype, such as ``types.int32``
+in Numba-CUDA-MLIR, must divide the byte capacity. The region's alignment must
+be at least the dtype's element size.
+An uninferred empty descriptor cannot be released; an explicit positive
+``size_in_bytes`` can supply its capacity.
+
+The returned region includes all exclusive slices and their padding. Release
+creates no new allocation and keeps independent descriptors disjoint. Release
+does not initialize the returned memory. Automatic trailing barriers on
+preceding primitive calls remain in place; release adds no barrier. Finish
+prior accesses and any
+asynchronous operations before using the returned array, then synchronize
+application reads and writes as for any shared array.
+
+Every alias of the descriptor is consumed. Later primitive, reservation, or
+release calls are compile errors if a path from an earlier release reaches
+them. Releasing in one runtime branch prevents later use after the branches
+join. Separate terminal releases in mutually exclusive branches are valid.
+Releasing a selection that merges distinct constructor sites is rejected;
+construct one descriptor before selecting its uses instead. A constructor or
+bound release method must exist on every path reaching the call.
+A descriptor created before a loop cannot be released repeatedly through its
+backedge. Constructing inside the loop gives each iteration a fresh descriptor,
+but reuses physical storage: finish accessing the previous returned array and
+synchronize before that reuse.
+
+This example copies a tile with cooperative Load and Store, then hands the
+scratch region to application code:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_storage_examples.py
+   :language: python
+   :name: coop-pg-temp-storage-release
+   :start-after: # temp-storage-release-example-begin
+   :end-before: # temp-storage-release-example-end
+   :dedent: 4
+   :prepend: items_per_thread, sharing = 4, "shared"
 
 When the combined scratch requirement exceeds the default static shared-memory
 limit, the backend can use dynamic shared memory, subject to the GPU's opt-in
@@ -568,9 +918,21 @@ User static shared arrays may coexist with static cooperative backing, but are
 rejected when the cooperative backing becomes dynamic, including an implicit
 oversized allocation. These checks apply after helper inlining. Keep both
 allocations static within the device limit, use global memory for the user
-buffer, or separate the work into kernels. Storage-free operations do not
-create this conflict. The compatibility restrictions remain until a released
-compiler with the shared-memory fix has passed the coexistence tests.
+buffer, or separate the work into kernels. Reduce uses the same cooperative
+backing, including when ``temp_storage`` is omitted. The compatibility restrictions remain
+until a released compiler with the shared-memory fix has passed the coexistence
+tests.
+
+Reservations are optional when ordinary static shared arrays and cooperative
+scratch fit together within the device's static shared-memory limit. The
+:download:`ordinary-array nvmath example
+<../../../python/cuda_coop/examples/numba_mlir/nvmath_fft_shared.py>` and
+:download:`ordinary-array nvmath/NVSHMEM example
+<../../../python/cuda_coop/examples/numba_mlir/nvmath_nvshmem_shared.py>` use
+``cuda.shared.array`` for library and application buffers, and implicit scratch
+for ``coop.sum``. They require no ``TempStorage`` descriptor or reservation.
+The kernel still supplies barriers for application data and the external
+libraries' completion and release calls.
 
 Extra shared memory can reduce resident blocks per multiprocessor. The
 default inferred allocation and unsized shared descriptor are sufficient
@@ -578,14 +940,424 @@ for the kernels above; use an explicit capacity when you have a reason to
 reserve that amount of shared memory.
 
 
+.. _coop-reductions:
+
+Reduction and result ownership
+------------------------------
+
+``coop.sum`` and ``coop.reduce`` combine the group's inputs into a scalar.
+Block, physical-warp, and logical-warp reductions accept a scalar or
+``ThreadData`` input; every item in every participating thread contributes.
+Consume the result only on group rank zero. All required members still
+execute the reduction. Logical-warp widths may be powers of two from 1
+through 32 or any width from 17 through 31. CUB supports only one
+non-power-of-two group per physical warp. For those widths, use
+``group_by(width, exhaustive=False)`` and
+guard the reduction with ``group.is_member()`` to exclude trailing lanes.
+
+The :doc:`Reduce visualization <visualizations/reduce>` shows which values
+contribute and which group members receive a defined result.
+
+This kernel writes one sum per block, including a partial final tile:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_programming_guide_examples.py
+   :language: python
+   :name: coop-pg-reduce
+   :start-after: # coop-pg-reduce-begin
+   :end-before: # coop-pg-reduce-end
+   :dedent: 4
+
+The group-rank test surrounds only the result write. Moving the reduction
+into that branch would leave required participants out of the call.
+
+For another built-in operator, use ``coop.reduce`` with ``binary_op`` set
+to ``"min"``, ``"max"``, ``"multiplies"``, ``"bit_and"``,
+``"bit_or"``, or ``"bit_xor"``. Choose the padding value accordingly.
+Qualified custom Reduce callbacks follow the same group and result contracts;
+they must be associative.
+
+Partial scalar Reduce also accepts ``valid_items`` on block and warp
+groups. It counts contributing threads from rank zero, must be between one
+and the group size, and requires a scalar input. The example instead
+pads a multi-item Load and reduces the full payload. These two techniques
+have different valid-count contracts.
+
+Block Reduce accepts ``temp_storage=scratch`` to share a ``coop.TempStorage``
+descriptor with other block operations. Omitting the argument uses
+compiler-managed scratch with automatic synchronization. An explicit
+``coop.TempStorage()`` defaults to ``auto_sync=False``: insert a block barrier
+between uses, or construct it with ``auto_sync=True``. Warp Reduce uses
+compiler-managed scratch.
+
+.. _coop-scans:
+
+Scan operators and carrying a prefix
+------------------------------------
+
+An inclusive scan includes the current element; an exclusive scan starts
+with an initial value and excludes the current element. For sum, the
+default exclusive initial value is zero. ``inclusive_sum`` and
+``exclusive_sum`` are convenient spellings; ``inclusive_scan`` and
+``exclusive_scan`` accept ``scan_op``.
+
+For a non-sum exclusive scan, supply ``initial_value`` with the correct
+dtype and meaning for the operator, or use the qualified Block Scan prefix
+callback described below. Inclusive Scan rejects an explicit initial value.
+Block array scans flatten their inputs in blocked order and return one
+result for every input element.
+
+The :doc:`Scan visualization <visualizations/scan>` compares inclusive and
+exclusive results and shows how an initial value or prefix callback changes
+the sequence.
+
+Built-in operators use the same string vocabulary as Reduce. Scan relies
+on an associative operation: regrouping the inputs must preserve the
+intended result. Floating-point arithmetic only approximates this
+property, so choose numerical tolerances that suit the application.
+
+A custom operator
+^^^^^^^^^^^^^^^^^
+
+Use a qualified call to pass a device function. For instance, the
+following explicit maximum operator computes a running maximum:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_programming_guide_examples.py
+   :language: python
+   :name: coop-pg-custom-scan
+   :start-after: # coop-pg-custom-scan-begin
+   :end-before: # coop-pg-custom-scan-end
+   :dedent: 4
+
+For maximum alone, the common ``scan_op="max"`` already suffices. The
+device function shows where to put an application's own associative
+operator. It executes on the GPU and must return the payload dtype.
+Binary Scan callbacks are stateless in the current API. Each callback
+combines two numeric scalars, even when a thread owns several items.
+
+.. _coop-prefix-callbacks:
+
+Several tiles in one block
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A Block Scan prefix callback supplies the prefix preceding a tile. A
+stateful callback can also update a running total for the next tile. The
+following kernel scans 384 values using one block and three successive
+128-element tiles:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_programming_guide_examples.py
+   :language: python
+   :name: coop-pg-prefix-callback
+   :start-after: # coop-pg-prefix-callback-begin
+   :end-before: # coop-pg-prefix-callback-end
+   :dedent: 4
+
+The callback receives the state first and the tile aggregate second. It
+returns the old total as the tile's prefix and saves the new total for the
+next call. The state payload is created before the loop, and every thread
+initializes its copy identically. Automatic scratch barriers remain enabled.
+
+CUB can invoke the callback in every lane of the block's first warp; only
+lane zero's returned prefix is applied. After the calls, read the final
+state from thread zero, as above. Other threads' state copies are not
+authoritative.
+
+State must be a numeric one-item payload with exactly the dtype declared
+by ``StatefulFunction``. Its dtype may differ from the scanned value dtype,
+as it does here, but the output still has the scanned dtype. A wider state
+does not widen the scan results.
+
+Prefix callbacks are available only on qualified Block Scan calls. They
+cannot be combined with ``initial_value`` or ``aggregate_output``. A
+stateless prefix callback accepts just the tile aggregate and returns the
+prefix. Warp Scan has no prefix callback support.
+
+Each block has its own state. Launching this kernel with several blocks
+would require separate input/output ranges and would create independent
+running sums. For a whole-array scan across many blocks, use an appropriate
+device-wide scan or design the additional inter-block algorithm explicitly.
+
+.. _coop-merge-sort:
+
+Sorting keys and associated values
+----------------------------------
+
+:func:`~cuda.coop.merge_sort_keys` orders a group's keys.
+:func:`~cuda.coop.merge_sort_pairs` moves an associated value with each key,
+such as an original array index. Both return new payloads and preserve their
+inputs. The payloads use :term:`blocked` order. Sorting each block's tile
+does not sort an array spanning several blocks.
+
+Follow keys and their associated values through the
+:doc:`Merge Sort visualization <visualizations/merge-sort>`.
+
+This example sorts a block tile and moves each key's original position
+with that key:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_merge_sort_examples.py
+   :language: python
+   :start-after: # merge-sort-example-begin
+   :end-before: # merge-sort-example-end
+   :dedent: 4
+
+The default order is ascending; use ``descending=True`` to reverse it.
+Merge Sort does not promise to preserve the input order of equal keys.
+The keys and values in a pair call must have the same number of items per
+thread, but may have different dtypes.
+
+Merge Sort supports blocks with a power-of-two thread count, physical
+warps, and logical warps of 1, 2, 4, 8, 16, or 32 lanes. Warp calls sort
+each group's tile independently. Every member of the group participates.
+Only block calls accept an explicit ``temp_storage`` descriptor.
+
+For a partial tile, pass ``valid_items`` together with ``oob_default``.
+Use the same count and sentinel in every group member. The count is between
+zero and ``group_size * items_per_thread`` and describes the group's blocked
+prefix. The sentinel must sort after all valid keys: use an upper bound for
+ascending order or a lower bound for descending order. A typed sentinel,
+whether a runtime value or a NumPy scalar constant, must have exactly the key
+dtype. For ordinary Python literals, integer keys require integers within
+the key dtype's range. Floating keys accept integer or floating literals
+within the dtype's finite range. They also accept positive or negative
+infinity, as a Python float or a NumPy scalar of the key dtype.
+
+Only the sorted valid prefix is defined. Load only the valid input elements
+and store only that output prefix. A sentinel does not make an out-of-bounds
+memory access valid.
+
+The qualified API accepts ``compare_op`` for a custom strict weak ordering.
+The comparator must be stateless, return a Boolean, and perform ordinary
+device computation. Supply the desired direction in the comparator rather
+than combining it with ``descending=True``.
+
+.. _coop-radix:
+
+Radix sorting and digit ranks
+-----------------------------
+
+:func:`~cuda.coop.radix_sort_keys` and :func:`~cuda.coop.radix_sort_pairs`
+sort a block's full tile by key bits. They accept blocked input, return
+new blocked payloads, and preserve their inputs. Radix Sort is a
+:term:`stable sort`: associated values whose keys have equal selected digits
+keep their blocked input order, in both ascending and descending sorts.
+The common API accepts signed or unsigned 32-bit and 64-bit keys in
+``ThreadData``; the qualified API also accepts floating-point sorting keys,
+scalar payloads, and fixed local arrays.
+
+The :doc:`Radix Rank/Sort visualization <visualizations/radix>` compares
+one digit's ranks with the successive passes of a full sort.
+
+This example retains the original positions of equal keys:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_radix_examples.py
+   :language: python
+   :start-after: # radix-sort-example-begin
+   :end-before: # radix-sort-example-end
+   :dedent: 4
+
+Use ``descending=True`` for largest keys first. ``begin_bit`` and
+``end_bit`` restrict ordering to a half-open bit interval satisfying
+``0 <= begin_bit < end_bit <= key_width``. The default ``end_bit`` is the full
+key width. Sort bounds may be runtime integers, but must be uniform across
+the block. Invalid runtime intervals trigger a device trap before narrowing
+to CUB's integer arguments.
+
+For signed and floating-point keys, CUB first transforms the bits into a
+form that preserves numeric order. A bit interval selects bits of that
+transformed key, so it can differ from the same bits of the original value.
+Full-width ordering uses the usual numeric order; floating-point NaNs follow
+CUB's bit ordering.
+
+Radix Sort consumes a full tile and has no ``valid_items`` parameter.
+Initialize every input slot. If an application pads a partial tile, it
+must choose padding that sorts outside the desired output prefix.
+
+Qualified ``blocked_to_striped=True`` changes the result layout. Use
+``store(..., algorithm="striped")`` to write that result in sorted order,
+or Exchange to convert it before an operation expecting blocked data.
+
+Radix Rank assigns a destination rank without moving keys. With
+``begin_bit=0, end_bit=4``, it ranks keys by their lowest four bits and
+preserves blocked input order among keys with the same digit. The output
+is an ``int32`` payload, independent of the key dtype:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_radix_examples.py
+   :language: python
+   :start-after: # radix-rank-example-begin
+   :end-before: # radix-rank-example-end
+   :dedent: 4
+
+The rank bit interval is a compile-time choice containing one to eight bits;
+it defaults to four bits starting at ``begin_bit``. When both ``end_bit`` and
+``radix_bits`` are supplied, they must describe the same interval. Ranking one
+digit does not rank keys by their complete values. The qualified
+:func:`~cuda.coop.numba_mlir.radix_rank_keys` also writes optional digit prefixes;
+its API reference describes the ``int32`` side array's required extent and
+bin indexing, including descending ranking.
+
+All radix calls are block-only; physical and logical warp groups are
+unsupported. Radix Sort accepts an explicit ``temp_storage`` descriptor;
+Radix Rank uses compiler-owned scratch.
+
+.. _coop-topk:
+
+Selecting the smallest or largest keys
+--------------------------------------
+
+:func:`~cuda.coop.topk_max_keys` selects a block's largest keys, and
+:func:`~cuda.coop.topk_min_keys` selects its smallest keys. The pair variants
+carry an associated value with each selected key. All return new payloads
+and preserve the inputs.
+
+TopK returns an unordered selection in the first ``min(k, valid_items)``
+positions of the blocked output tile. Omitted ``valid_items`` means the
+full tile. The remaining slots are unspecified: do not read or store them.
+When several keys tie at the selection boundary, the operation chooses
+enough to fill the requested result without a tie-order guarantee.
+
+The :doc:`TopK visualization <visualizations/topk>` shows which candidates
+remain and how ``k`` and ``valid_items`` determine the defined output prefix.
+
+Here one block selects the eight largest keys from a partial tile and
+returns their original indices:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_topk_examples.py
+   :language: python
+   :start-after: # topk-example-begin
+   :end-before: # topk-example-end
+   :dedent: 4
+
+The example knows that at least eight keys are valid. A general kernel
+must compute ``min(k, valid_items)`` and use that as Store's valid count.
+Both controls count elements across the block, not elements per thread.
+They may be runtime integers, must be uniform across the block, and must
+lie between zero and the tile's capacity. If either count is zero, no
+output positions are defined.
+
+The current backend supports one-dimensional blocks. Warp and logical-warp
+TopK are unsupported. Calls use automatic scratch or an explicit
+``temp_storage`` descriptor with the usual reuse synchronization.
+Bit-range selection is unavailable in the current TopK API.
+
+Use a sorting primitive when the result must be ordered. TopK can avoid
+ordering elements that the kernel will discard; it does not promise that
+its selected prefix is already sorted. See :ref:`the TopK FAQ
+<coop-faq-topk-order>`.
+
+.. _coop-neighbor-comparisons:
+
+Comparing neighboring values
+----------------------------
+
+:func:`cuda.coop.adjacent_difference` computes an arithmetic result for each
+item and its left or right neighbor. It returns a fresh payload and
+preserves its input. A tile predecessor or successor lets comparisons
+continue across tile boundaries. With ``valid_items``, the invalid suffix
+is copied from the input. The current CUB interface does not support a
+right partial difference with an explicit successor; that combination
+is rejected.
+
+:func:`cuda.coop.discontinuity` returns ``int32`` head flags, tail flags,
+or both. Its default predicate marks unequal neighbors. Both operations
+interpret inputs in blocked order, but Discontinuity always processes a
+full tile. Arbitrary padding can change the last valid item's tail flag.
+The :doc:`Adjacent Difference <visualizations/adjacent-difference>` and
+:doc:`Discontinuity <visualizations/discontinuity>` pages explain tile
+boundaries and include tested delta-encoding and run-ID examples.
+
+The qualified functions in ``cuda.coop.numba_mlir`` also accept fixed-size
+local arrays and stateless device-compilable binary callables.
+``difference_op(current, neighbor)`` returns the input dtype. Its argument
+order stays the same for left and right differences.
+
+For Discontinuity, ``flag_op(previous, current)`` determines heads and
+``flag_op(current, next)`` determines tails. The distinction matters for a
+predicate such as ``<``. Without a supplied tile boundary, the first head
+or last tail remains one regardless of the predicate. Returned flags have
+``int32`` dtype and the same per-thread extent as the input.
+
+See :func:`cuda.coop.numba_mlir.adjacent_difference` and
+:func:`cuda.coop.numba_mlir.discontinuity` for the qualified API reference.
+
+.. _coop-histogram:
+
+Counting samples by bin
+-----------------------
+
+:func:`cuda.coop.histogram` counts a block's integer samples into ``bins``
+counters. Each sample must be in ``[0, bins)``. ``bins_per_thread`` fixes
+the result extent, so ``block_threads * bins_per_thread`` must cover all
+bins. The default counter dtype is ``int32``; 32- and 64-bit signed or
+unsigned counters are supported.
+
+The result uses striped bin ownership: thread ``t``, slot ``i`` owns bin
+``t + i * block_threads``. Slots beyond ``bins`` contain zero. Use a
+striped Store with ``valid_items=bins`` to write the counters in bin order.
+Both ``algorithm="atomic"`` and ``algorithm="sort"`` preserve the input
+samples and return fresh counts. The :doc:`Histogram visualization
+<visualizations/histogram>` includes a tested example that accumulates
+several tiles by adding their returned counters.
+
+Histogram has no partial-input count. Padding a short tile with zeros
+adds samples to bin zero; see :ref:`the padding FAQ
+<coop-faq-histogram-padding>`.
+
+.. _coop-run-length-decode:
+
+Expanding runs into values
+--------------------------
+
+:func:`cuda.coop.run_length_decode` expands matching per-thread run-value
+and run-length payloads into a fresh blocked output window. Run lengths
+must form a positive prefix followed by optional zeros. The window starts
+at ``decoded_window_offset`` in the expanded sequence and contains
+``block_threads * decoded_items_per_thread`` positions. Positions past the
+end contain zero, including when all run lengths are zero.
+
+:func:`cuda.coop.run_length_decode_into` expands the entire sequence into
+a destination array. It prepares the run table once and loops over output
+windows inside one call. It checks capacity before writing and returns the
+total decoded size to every block member. Keep source and destination
+storage separate; a nonzero ``destination_offset`` reserves an output
+prefix for other data.
+
+Use the qualified API when a windowed call needs total-size or relative
+run-offset outputs, or when decoded positions require ``uint64``.
+:term:`Relative run offsets <relative run offset>` count positions within
+each run, while ``decoded_window_offset`` counts positions in the complete
+expanded sequence. All threads must use the same window or destination
+offset. The :doc:`RLD visualization <visualizations/run-length-decode>`
+shows both interfaces with tested kernels and a window crossing a run
+boundary.
+
+.. _coop-batched-reductions:
+
+Reducing independent batches within a warp
+------------------------------------------
+
+:func:`cuda.coop.reduce_batched` treats each local input slot as a separate
+batch. With three items per lane, it reduces three batches across the
+warp and distributes their three results among lanes. It preserves the
+input and returns ``ceil(batches / warp_width)`` slots per thread.
+
+The default ``output_layout="striped"`` assigns batch
+``lane + slot * warp_width`` to a result slot. ``"blocked"`` assigns batch
+``lane * result_extent + slot``. Guard reads and stores when that batch
+index is outside the input batch count: extra allocated slots are
+unspecified. Every member of the selected warp participates, including
+lanes that own no result.
+
+See the :doc:`feature-sum kernel <visualizations/reduce-batched>` for a
+complete example. The :ref:`batched reduction FAQ <coop-faq-batched-reduce>`
+compares this operation with ordinary Reduce.
+
 Checking and tuning a kernel
 ----------------------------
 
 Check results before comparing algorithms. Useful cases include one full
 tile, several tiles, a single valid element in the final tile, and an empty
 input handled on the host. Layout conversions are easier to inspect with
-distinct input values. Compare computed values against a CPU reference with
-a suitable accumulation dtype and floating-point tolerance.
+distinct input values. For reductions and scans, compare against a CPU
+reference with a suitable accumulation dtype and floating-point tolerance.
 
 Keep launch dimensions, logical-warp widths, payload extents, and algorithm
 choices consistent with the code. The compiler specializes group operations
@@ -596,7 +1368,7 @@ at compile time.
 Warm up the kernel before timing it, use device-resident arrays, and account
 for asynchronous execution with CUDA events or explicit synchronization.
 Then vary one choice at a time: threads per block, items per thread, or a
-Load/Store algorithm. More items per thread can amortize primitive
+Load/Store or Scan algorithm. More items per thread can amortize primitive
 work while increasing register pressure. Scratch-heavy choices consume
 shared memory and can reduce occupancy. Measure the complete kernel,
 including conversions and synchronization.
@@ -607,3 +1379,18 @@ static parameters, and import order first. The :doc:`API reference
 collects operation restrictions and configuration. For generated-source
 diagnostics and the compiler integration, see the
 :doc:`Developer Overview <developer_overview>`.
+
+Launch resource bounds
+----------------------
+
+A kernel specialized for an exact cooperative launch block receives an
+inferred ``launch_bounds`` equal to that block's thread count, unless the
+kernel supplies ``launch_bounds`` with a value other than ``None`` or sets
+``max_registers``. This lets the compiler account for the launch size when
+allocating registers. It can prevent a large block from failing to launch
+because the generated code uses too many registers per thread.
+
+Explicit bounds retain their meaning and must admit the exact launch. The
+inferred bound does not change the block dimensions or the kernel's launch
+specialization. Lower register use can require spilling, so this behavior does
+not imply a performance improvement.
