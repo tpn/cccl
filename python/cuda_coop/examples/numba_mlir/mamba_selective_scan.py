@@ -163,6 +163,12 @@ def selective_scan_kernel(
         )
 
         for i in range(items_per_thread):
+            s = delta_td[i]
+            if has_bias:
+                s = s + bias[channel]
+            if softplus:
+                s = apply_softplus(s)
+            delta_td[i] = types.float32(s)
             y_td[i] = types.float32(0.0)
 
         for n in range(nstate):
@@ -204,6 +210,15 @@ def selective_scan_kernel(
                 h_carry[n] = h_new
             block.sync()
 
+        for i in range(items_per_thread):
+            t = start + thread * items_per_thread + i
+            v = y_td[i]
+            if has_d:
+                v += d[channel] * u_td[i]
+            if t < length and has_z:
+                v *=silu(z[seq_index(row, length, t)])
+            y_td[i] = types.float32(v)
+
         coop.store(
             block,
             output,
@@ -216,8 +231,8 @@ def selective_scan_kernel(
         block.sync()
 
     
-        for n in range(thread, nstate, THREADS): 
-            last_state[state_index(row, nstate, n)] = h_carry[n]
+    for n in range(thread, nstate, THREADS): 
+        last_state[state_index(row, nstate, n)] = h_carry[n]
 
 
 def selective_scan(
@@ -361,7 +376,7 @@ def selective_scan_reference(
 
 
 def run_example(items_per_thread: int = ITEMS_PER_THREAD) -> float:
-    """Check lengths, state counts, and B/C layouts; return the max output error."""
+    """Check lengths, states, B/C layouts, and options; return the max output error."""
 
     rng = np.random.default_rng(0)
     batch, dim, groups = 2, 4, 2
@@ -376,25 +391,40 @@ def run_example(items_per_thread: int = ITEMS_PER_THREAD) -> float:
         return rng.standard_normal(shape, dtype=np.float32)
 
     configs = [
-        (length, 1, "fixed", "fixed")
+        (length, 1, "fixed", "fixed", False)
         for length in (31, tile_items, tile_items + 1, 2 * tile_items + 1)
     ] + [
-        (tile_items + 1, 3, "variable", "variable"),
-        (tile_items + 1, 16, "grouped", "grouped"),
-        (2 * tile_items + 1, 8, "fixed", "grouped"),
+        (tile_items + 1, 3, "variable", "variable", False),
+        (tile_items + 1, 16, "grouped", "grouped", False),
+        (2 * tile_items + 1, 8, "fixed", "grouped", False),
+        (31, 4, "variable", "fixed", True),
+        (2 * tile_items + 1, 16, "grouped", "variable", True),
     ]
     worst = 0.0
-    for length, nstate, b_layout, c_layout in configs:
+    for length, nstate, b_layout, c_layout, options in configs:
         u = rng.standard_normal((batch, dim, length), dtype=np.float32)
-        delta = rng.uniform(0.01, 0.1, (batch, dim, length)).astype(np.float32)
         A = -rng.uniform(0.5, 2.0, (dim, nstate)).astype(np.float32)
         B = weight(b_layout, nstate, length)
         C = weight(c_layout, nstate, length)
+        if options:
+            # Pre-activation delta: softplus maps it to small positive steps.
+            delta = rng.normal(-3.0, 1.0, (batch, dim, length)).astype(np.float32)
+            extra = dict(
+                D=rng.standard_normal(dim, dtype=np.float32),
+                z=rng.standard_normal((batch, dim, length), dtype=np.float32),
+                delta_bias=rng.uniform(-0.5, 0.5, dim).astype(np.float32),
+                delta_softplus=True,
+            )
+        else:
+            delta = rng.uniform(0.01, 0.1, (batch, dim, length)).astype(np.float32)
+            extra = {}
 
         output, last_state = selective_scan(
-            u, delta, A, B, C, items_per_thread=items_per_thread
+            u, delta, A, B, C, **extra, items_per_thread=items_per_thread
         )
-        want_output, want_state = selective_scan_reference(u, delta, A, B, C)
+        want_output, want_state = selective_scan_reference(
+            u, delta, A, B, C, **extra
+        )
         np.testing.assert_allclose(output, want_output, rtol=1e-4, atol=1e-5)
         np.testing.assert_allclose(last_state, want_state, rtol=1e-4, atol=1e-5)
         worst = max(worst, float(np.max(np.abs(output - want_output))))
