@@ -51,9 +51,12 @@ def run_example(api="common", items_per_thread=2):
         storage = coop.TempStorage(
             sharing="shared", alignment=64, auto_sync=True
         )
-        payload = coop.ThreadData(items_per_thread)
-        coop.load(
-            group, source, payload, algorithm="transpose", temp_storage=storage
+        payload = coop.load(
+            group,
+            source,
+            items_per_thread=items_per_thread,
+            algorithm="transpose",
+            temp_storage=storage,
         )
         scanned = coop.exclusive_scan(
             group, payload, initial_value=7, temp_storage=storage

@@ -56,19 +56,17 @@ def run_example(api="common", items_per_thread=3):
         tile_size = 64 * items_per_thread
         valid_items = tile_size - 7
         group = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
-        values = coop.ThreadData(items_per_thread)
-        coop.load(
+        keys = coop.load(
             group,
             source_keys,
-            keys,
+            items_per_thread=items_per_thread,
             valid_items=valid_items,
             oob_default=1000,
         )
-        coop.load(
+        values = coop.load(
             group,
             source_values,
-            values,
+            items_per_thread=items_per_thread,
             valid_items=valid_items,
             oob_default=0.0,
         )

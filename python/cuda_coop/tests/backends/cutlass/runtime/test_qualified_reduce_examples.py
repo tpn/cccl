@@ -30,8 +30,7 @@ def test_reduce_example(items_per_thread):
         items_per_thread: cutlass.Constexpr,
     ):
         block = coop.this_block()
-        values = coop.ThreadData(items_per_thread)
-        coop.load(block, source, values)
+        values = coop.load(block, source, items_per_thread=items_per_thread)
         total = coop.sum(block, values)
         maximum = coop.reduce(block, values, binary_op="max")
         total_output = cute.make_tensor(totals, cute.make_layout(1))

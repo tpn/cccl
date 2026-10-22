@@ -85,9 +85,11 @@ block.
 .. code-block:: python
 
    block = coop.this_block()
-   items = coop.ThreadData(items_per_thread)
    offset = block_index * 128 * items_per_thread
-   coop.load(block, source, items, algorithm="striped", offset=offset)
+   items = coop.load(
+       block, source, items_per_thread=items_per_thread,
+       algorithm="striped", offset=offset,
+   )
    blocked = coop.exchange(block, items, mode="striped_to_blocked")
    coop.store(block, destination, blocked, algorithm="direct", offset=offset)
    # blocked owns consecutive items; items retains striped ownership.
@@ -99,11 +101,13 @@ full-tile reversal writes every destination exactly once:
 .. code-block:: python
 
    block = coop.this_block()
-   items = coop.ThreadData(items_per_thread)
    ranks = coop.ThreadData(items_per_thread)
    tile_size = cuda.blockDim.x * items_per_thread
    offset = cuda.blockIdx.x * tile_size
-   coop.load(block, source, items, algorithm="direct", offset=offset)
+   items = coop.load(
+       block, source, items_per_thread=items_per_thread,
+       algorithm="direct", offset=offset,
+   )
    for item in range(items_per_thread):
        position = cuda.threadIdx.x * items_per_thread + item
        ranks[item] = tile_size - 1 - position

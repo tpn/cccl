@@ -34,9 +34,8 @@ def test_merge_sort_pairs_example():
     @cuda.jit
     def order_tile(source, sorted_keys, original_positions, items_per_thread):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
         positions = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         for item in range(items_per_thread):
             positions[item] = types.int32(
                 cuda.threadIdx.x * items_per_thread + item
@@ -77,8 +76,13 @@ def test_merge_sort_keys_example():
     @cuda.jit
     def order_partial_tile(source, count, destination, items_per_thread):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys, valid_items=count, oob_default=-1)
+        keys = coop.load(
+            block,
+            source,
+            items_per_thread=items_per_thread,
+            valid_items=count,
+            oob_default=-1,
+        )
         ordered = coop.merge_sort_keys(
             block,
             keys,

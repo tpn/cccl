@@ -86,11 +86,10 @@ def test_load_layout_and_runtime_bounds(api, algorithm, valid):
     ):
         x, y, z = cute.arch.thread_idx()
         thread = x + _BLOCK[0] * (y + _BLOCK[1] * z)
-        payload = api.ThreadData(items_per_thread)
-        api.load(
+        payload = api.load(
             api.this_block(),
             source,
-            payload,
+            items_per_thread=items_per_thread,
             algorithm=algorithm,
             valid_items=count,
             oob_default=-29,
@@ -209,20 +208,19 @@ def test_partial_transpose_loads_valid_items_without_default(
         x, y, z = cute.arch.thread_idx()
         thread = x + _BLOCK[0] * (y + _BLOCK[1] * z)
         outputs = cute.make_tensor(observed, cute.make_layout(_TILE))
-        payload = cutlass_coop.ThreadData(items_per_thread, dtype=cutlass.Int32)
         if cutlass.const_expr(static_count):
-            cutlass_coop.load(
+            payload = cutlass_coop.load(
                 cutlass_coop.this_block(),
                 source,
-                payload,
+                items_per_thread=items_per_thread,
                 algorithm=algorithm,
                 valid_items=valid,
             )
         else:
-            cutlass_coop.load(
+            payload = cutlass_coop.load(
                 cutlass_coop.this_block(),
                 source,
-                payload,
+                items_per_thread=items_per_thread,
                 algorithm=algorithm,
                 valid_items=count,
             )
@@ -283,11 +281,10 @@ def test_unguarded_full_tiles_use_the_correct_layout(
         outputs = cute.make_tensor(
             observed, cute.make_layout(_THREADS * items_per_thread)
         )
-        loaded = cutlass_coop.ThreadData(items_per_thread)
-        cutlass_coop.load(
+        loaded = cutlass_coop.load(
             cutlass_coop.this_block(),
             source,
-            loaded,
+            items_per_thread=items_per_thread,
             algorithm=algorithm,
             offset=offset,
         )
@@ -366,11 +363,10 @@ def test_storage_reuse_in_runtime_loop(
             alignment=1,
         )
         for tile in range(tiles):
-            payload = cutlass_coop.ThreadData(items_per_thread)
-            cutlass_coop.load(
+            payload = cutlass_coop.load(
                 cutlass_coop.this_block(),
                 source,
-                payload,
+                items_per_thread=items_per_thread,
                 algorithm=algorithm,
                 offset=tile * _TILE,
                 temp_storage=storage,
@@ -435,11 +431,10 @@ def test_requested_storage_alignment_is_a_minimum(api, alignment, sharing):
         storage = api.TempStorage(
             alignment=alignment, sharing=sharing, auto_sync=True
         )
-        payload = api.ThreadData(items_per_thread)
-        api.load(
+        payload = api.load(
             api.this_block(),
             source,
-            payload,
+            items_per_thread=items_per_thread,
             algorithm="transpose",
             temp_storage=storage,
         )
@@ -518,11 +513,10 @@ def test_deferred_storage_preserves_user_shared_memory(api, sharing):
         cute.arch.sync_threads()
 
         storage = api.TempStorage(sharing=sharing)
-        payload = api.ThreadData(items_per_thread)
-        api.load(
+        payload = api.load(
             api.this_block(),
             source,
-            payload,
+            items_per_thread=items_per_thread,
             algorithm="transpose",
             temp_storage=storage,
         )
@@ -591,11 +585,10 @@ def test_final_cubin_storage_contract(tmp_path, algorithm):
         storage = cutlass_coop.TempStorage(
             sharing="shared", alignment=64, auto_sync=True
         )
-        payload = cutlass_coop.ThreadData(items_per_thread)
-        cutlass_coop.load(
+        payload = cutlass_coop.load(
             cutlass_coop.this_block(),
             source,
-            payload,
+            items_per_thread=items_per_thread,
             algorithm=algorithm,
             temp_storage=storage,
         )

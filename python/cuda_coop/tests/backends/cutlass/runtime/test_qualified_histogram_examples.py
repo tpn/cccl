@@ -30,8 +30,7 @@ def test_histogram_example(items_per_thread):
         items_per_thread: cutlass.Constexpr,
     ):
         block = coop.this_block()
-        samples = coop.ThreadData(items_per_thread)
-        coop.load(block, source, samples)
+        samples = coop.load(block, source, items_per_thread=items_per_thread)
         atomic_counts = coop.histogram(
             block, samples, bins=70, bins_per_thread=2
         )

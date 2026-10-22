@@ -70,14 +70,13 @@ def test_sum_example():
     @cuda.jit
     def sum_tiles(source, totals, items_per_thread):
         block = coop.this_block()
-        items = coop.ThreadData(items_per_thread)
         tile_size = cuda.blockDim.x * items_per_thread
         offset = cuda.blockIdx.x * tile_size
         valid = min(max(source.size - offset, 0), tile_size)
-        coop.load(
+        items = coop.load(
             block,
             source,
-            items,
+            items_per_thread=items_per_thread,
             offset=offset,
             valid_items=valid,
             oob_default=0,

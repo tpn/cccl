@@ -100,11 +100,10 @@ def test_release_rejects_later_use(operation):
         elif cutlass.const_expr(operation == "sync"):
             alias.sync()
         else:
-            payload = coop.ThreadData(items_per_thread=1)
             coop.load(
                 coop.this_block(),
                 memory,
-                payload,
+                items_per_thread=1,
                 algorithm=operation,
                 temp_storage=alias,
             )

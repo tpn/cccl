@@ -56,13 +56,12 @@ def run_example(api="common", items_per_thread=4):
         x, y, z = cute.arch.thread_idx()
         thread = x + _BLOCK[0] * (y + _BLOCK[1] * z)
         warp = thread // 32
-        payload = coop.ThreadData(items_per_thread)
         # Each warp gets its own consecutive tile automatically. The user
         # offset selects the beginning of the block's collection of tiles.
-        coop.load(
+        payload = coop.load(
             coop.this_warp(),
             source,
-            payload,
+            items_per_thread=items_per_thread,
             algorithm="transpose",
             valid_items=cutlass.Int32(warp_tile - 7 - warp * 11),
             oob_default=-1,

@@ -18,6 +18,10 @@ from numbers import Integral, Real
 from typing import Any
 
 from cuda.coop._core import ArgumentBinding, GroupLoadStoreAlgorithm
+from cuda.coop._core.api._dispatch import (
+    _common_root_operation_name,
+    _common_root_operation_scope,
+)
 from cuda.coop._core.api._payload import _validate_common_temp_storage
 from cuda.coop._core.thread_group import ThreadGroup as CommonThreadGroup
 from cuda.coop._typing import (
@@ -87,21 +91,25 @@ def _resolve_group(group, algorithm, temp_storage, operation):
 def load(
     group: BlockGroup | WarpGroup,
     source: object,
-    output: ThreadDataLike[_CommonNumericT],
+    output: ThreadDataLike[_CommonNumericT] | None = None,
     /,
     *,
+    items_per_thread: int | None = None,
     algorithm: BlockLoadStoreAlgorithm | WarpLoadStoreAlgorithm = "direct",
     valid_items: ValidItems | None = None,
     oob_default: _CommonNumericT | float | None = None,
     offset: IntegerValue | None = None,
     temp_storage: TempStorageLike | None = None,
-) -> None:
-    """Load a contiguous group tile into a writable per-thread payload.
+) -> ThreadData | None:
+    """Load a contiguous group tile into per-thread values.
 
     Shared parameters and participation follow :func:`cuda.coop.load`. This
-    implementation accepts blocks and physical or logical warps. The output
-    must be CUTLASS ThreadData; its dtype is inferred from the source, or must
-    agree with it when already declared.
+    implementation accepts blocks and physical or logical warps. Supply a
+    positive compile-time ``items_per_thread`` to return fresh CUTLASS
+    ThreadData with the source dtype. Alternatively, supply a CUTLASS
+    ThreadData ``output`` to fill it in place and return ``None``. Its dtype
+    is inferred from the source, or must agree with it when already declared.
+    Supply exactly one of ``output`` and ``items_per_thread``.
 
     Load populates the payload in the selected algorithm's layout. Beyond
     ``valid_items``, slots have unspecified values unless ``oob_default`` is
@@ -151,6 +159,21 @@ def load(
         :dedent: 4
     """
 
+    returns_output = output is None
+    if returns_output:
+        if items_per_thread is None:
+            raise TypeError(
+                f"{_SCOPE}.load requires output or items_per_thread"
+            )
+        if _common_root_operation_name() == "load":
+            with _common_root_operation_scope("ThreadData"):
+                output = ThreadData(items_per_thread)
+        else:
+            output = ThreadData(items_per_thread)
+    elif items_per_thread is not None:
+        raise TypeError(
+            f"{_SCOPE}.load accepts output or items_per_thread, not both"
+        )
     if not isinstance(output, ThreadData):
         raise TypeError(f"{_SCOPE}.load output must be ThreadData")
     if oob_default is not None and valid_items is None:
@@ -176,6 +199,7 @@ def load(
         offset_binding=_classify_integer_binding(offset, name="offset"),
         temp_storage=temp_storage,
     )
+    return output if returns_output else None
 
 
 def store(

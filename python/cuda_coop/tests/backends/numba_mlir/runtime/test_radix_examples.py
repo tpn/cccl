@@ -37,9 +37,8 @@ def test_radix_sort_pairs_example():
     @cuda.jit
     def order_tile(source, sorted_keys, original_positions, items_per_thread):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
         positions = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         for item in range(items_per_thread):
             positions[item] = types.int32(
                 cuda.threadIdx.x * items_per_thread + item
@@ -82,8 +81,7 @@ def test_radix_rank_example():
     @cuda.jit
     def rank_low_digit(source, destination, items_per_thread):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         ranks = coop.radix_rank_keys(block, keys, begin_bit=0, end_bit=4)
         coop.store(block, destination, ranks)
 
@@ -111,8 +109,7 @@ def test_radix_sort_keys_example():
     @cuda.jit
     def order_low_byte(source, destination, items_per_thread):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         ordered = coop.radix_sort_keys(
             block, keys, begin_bit=0, end_bit=8, descending=True
         )

@@ -311,8 +311,9 @@ def test_warp_payload_forms(items_per_thread, width, form):
         group = cutlass_coop.this_warp()
         if cutlass.const_expr(width != 32):
             group = group.group_by(width)
-        payload = cutlass_coop.ThreadData(items_per_thread)
-        cutlass_coop.load(group, memory, payload)
+        payload = cutlass_coop.load(
+            group, memory, items_per_thread=items_per_thread
+        )
         if cutlass.const_expr(form == "register_tensor"):
             values = payload.to_register_tensor()
         elif cutlass.const_expr(form == "tensor_ssa"):

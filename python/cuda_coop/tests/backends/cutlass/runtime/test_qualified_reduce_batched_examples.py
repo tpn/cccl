@@ -30,8 +30,7 @@ def test_reduce_batched_example(items_per_thread):
     ):
         block = coop.this_block()
         warp = coop.this_warp()
-        values = coop.ThreadData(items_per_thread)
-        coop.load(block, source, values)
+        values = coop.load(block, source, items_per_thread=items_per_thread)
         totals = coop.reduce_batched(warp, values)
         output = cute.make_tensor(
             destination, cute.make_layout(2 * items_per_thread)

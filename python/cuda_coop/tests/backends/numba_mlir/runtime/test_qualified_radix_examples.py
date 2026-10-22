@@ -30,9 +30,8 @@ def test_qualified_radix_examples():
         source, key_output, pair_output, positions, ranks_out, items_per_thread
     ):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
         indices = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         for item in range(items_per_thread):
             indices[item] = types.int32(block.rank() * items_per_thread + item)
         ordered = coop.radix_sort_keys(block, keys, begin_bit=0, end_bit=4)

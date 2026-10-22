@@ -58,10 +58,12 @@ def test_rld_production_compile_and_link(
     ):
         block = numba_coop.this_block()
         storage = numba_coop.TempStorage()
-        values = numba_coop.ThreadData(items_per_thread, dtype=types.float64)
-        lengths = numba_coop.ThreadData(items_per_thread, dtype=types.uint64)
-        numba_coop.load(block, source, values)
-        numba_coop.load(block, counts, lengths)
+        values = numba_coop.load(
+            block, source, items_per_thread=items_per_thread
+        )
+        lengths = numba_coop.load(
+            block, counts, items_per_thread=items_per_thread
+        )
         if bulk:
             if relative:
                 total = numba_coop.run_length_decode_into(

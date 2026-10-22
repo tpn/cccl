@@ -74,9 +74,11 @@ at least ``128 * items_per_thread`` source and destination elements.
 .. code-block:: python
 
    block = coop.this_block()
-   items = coop.ThreadData(items_per_thread)
    offset = block_index * 128 * items_per_thread
-   coop.load(block, source, items, algorithm="direct", offset=offset)
+   items = coop.load(
+       block, source, items_per_thread=items_per_thread,
+       algorithm="direct", offset=offset,
+   )
    coop.store(block, destination, items, algorithm="transpose", offset=offset)
    # The block's values are written in their original logical order.
    # Store writes memory and returns None; items may now be rearranged.

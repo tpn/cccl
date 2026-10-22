@@ -205,12 +205,11 @@ def test_reductions_reuse_explicit_scratch_with_load(
         scratch = module.TempStorage(
             size_in_bytes, sharing=sharing, auto_sync=auto_sync
         )
-        items = module.ThreadData(items_per_thread)
         for tile in range(2):
-            module.load(
+            items = module.load(
                 block,
                 source,
-                items,
+                items_per_thread=items_per_thread,
                 offset=tile * cuda.blockDim.x * items_per_thread,
                 algorithm="transpose",
                 temp_storage=scratch,

@@ -70,11 +70,10 @@ def test_reservations_survive_scratch_reuse_and_accept_foreign_consumer(
         cuda.syncthreads()
 
         block = coop.this_block()
-        items = coop.ThreadData(items_per_thread)
-        coop.load(
+        items = coop.load(
             block,
             source,
-            items,
+            items_per_thread=items_per_thread,
             algorithm="transpose",
             temp_storage=storage,
         )

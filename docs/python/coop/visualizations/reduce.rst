@@ -77,8 +77,10 @@ least ``128 * items_per_thread`` input elements for each block.
 .. code-block:: python
 
    block = coop.this_block()
-   values = coop.ThreadData(items_per_thread)
-   coop.load(block, source, values, offset=block_index * 128 * items_per_thread)
+   values = coop.load(
+       block, source, items_per_thread=items_per_thread,
+       offset=block_index * 128 * items_per_thread,
+   )
    total = coop.sum(block, values, algorithm="raking")
    if thread_rank == 0:
        output[block_index] = total

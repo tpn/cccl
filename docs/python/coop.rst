@@ -100,9 +100,9 @@ write the result back to memory:
 
    # Inside a kernel, with `coop` imported from `cuda`:
    block = coop.this_block()
-   items = coop.ThreadData(items_per_thread)
-
-   coop.load(block, source, items, offset=offset)
+   items = coop.load(
+       block, source, items_per_thread=items_per_thread, offset=offset
+   )
    prefixes = coop.exclusive_sum(block, items)
    coop.store(block, destination, prefixes, offset=offset)
 
@@ -128,6 +128,10 @@ handling and the compiler's launch syntax.
    <span id="exchange-semantics"></span><span id="shuffle-semantics"></span>
    <span id="scan-semantics"></span><span id="coop-common-results"></span>
    <span id="coop-common-storage"></span><span id="temporary-storage"></span>
+
+Load returns a ``ThreadData`` payload whose element type comes from ``source``.
+You can also construct ``ThreadData`` directly and pass it as Load's output
+when you need to populate an existing payload.
 
 The :doc:`programming concepts <coop/concepts>` explain participation,
 data layouts, result ownership, and temporary storage in detail.

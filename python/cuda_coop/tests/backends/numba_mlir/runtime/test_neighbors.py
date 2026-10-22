@@ -146,8 +146,7 @@ def test_flags_boundaries_pair_results_and_chained_scan(
         source, head_out, tail_out, prefix_out, original, items_per_thread
     ):
         block = coop.this_block()
-        values = coop.ThreadData(items_per_thread)
-        coop.load(block, source, values)
+        values = coop.load(block, source, items_per_thread=items_per_thread)
         if mode == "heads_and_tails":
             if boundary:
                 heads, tails = coop.discontinuity(
@@ -285,8 +284,9 @@ def test_multiblock_delta_example():
         # source tile's last value, so an in-place launch would race.
         block = coop.this_block()
         base = cuda.blockIdx.x * cuda.blockDim.x * items_per_thread
-        values = coop.ThreadData(items_per_thread)
-        coop.load(block, source, values, offset=base)
+        values = coop.load(
+            block, source, items_per_thread=items_per_thread, offset=base
+        )
         previous = np.int32(0)
         if base > 0:
             previous = source[base - 1]
@@ -320,8 +320,9 @@ def test_tile_run_labels_example():
         # Full block tiles; IDs restart at zero in each block.
         block = coop.this_block()
         base = cuda.blockIdx.x * cuda.blockDim.x * items_per_thread
-        values = coop.ThreadData(items_per_thread)
-        coop.load(block, keys, values, offset=base)
+        values = coop.load(
+            block, keys, items_per_thread=items_per_thread, offset=base
+        )
         heads = coop.discontinuity(block, values, mode="heads")
         labels = coop.inclusive_sum(block, heads)
         for i in range(items_per_thread):
