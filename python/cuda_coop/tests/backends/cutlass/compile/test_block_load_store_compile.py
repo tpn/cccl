@@ -79,6 +79,7 @@ def test_algorithm_selector_spellings(api, algorithm, items_per_thread):
         ("scalar-dtype", "dtype"),
         ("boolean-count", "integer"),
         ("dynamic-items", "integer"),
+        ("dynamic-alignment", "alignment"),
         ("float-offset", "integer"),
         ("negative-offset", "non-negative"),
         ("too-many-valid", "valid_items"),
@@ -117,6 +118,13 @@ def test_invalid_movement_inputs(case, message):
                 group,
                 memory,
                 items_per_thread=cute.arch.thread_idx()[0] + 1,
+            )
+        elif cutlass.const_expr(case == "dynamic-alignment"):
+            cutlass_coop.load(
+                group,
+                memory,
+                items_per_thread=1,
+                alignment=cute.arch.thread_idx()[0] + 1,
             )
         elif cutlass.const_expr(case == "float-offset"):
             cutlass_coop.load(

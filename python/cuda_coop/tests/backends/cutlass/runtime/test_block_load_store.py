@@ -62,6 +62,7 @@ def test_returned_payload_helpers_aliases_and_register_exports(
             api.this_block(),
             source,
             items_per_thread=items_per_thread,
+            alignment=128,
             offset=offset,
         )
 
@@ -89,6 +90,10 @@ def test_returned_payload_helpers_aliases_and_register_exports(
             previous = values
         vector = values.to_tensor_ssa()
         registers = values.to_register_tensor()
+        if cutlass.const_expr(
+            values.alignment != 128 or "align<128>" not in str(registers.type)
+        ):
+            raise AssertionError("Load result lost its requested alignment")
         registers[0] = registers[0] + 100
         for item in cutlass.range_constexpr(items_per_thread):
             index = thread * items_per_thread + item

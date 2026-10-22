@@ -50,7 +50,7 @@ def check_cutlass_surface(source: object, destination: object) -> None:
     """
 
     block = cutlass_coop.this_block()
-    loaded = cutlass_coop.load(block, source, items_per_thread=2)
+    loaded = cutlass_coop.load(block, source, items_per_thread=2, alignment=64)
     assert_type(loaded, cutlass_coop.ThreadData[Any])
     loaded.to_tensor_ssa()
     loaded.to_register_tensor()
@@ -60,7 +60,7 @@ def check_cutlass_surface(source: object, destination: object) -> None:
     assert_type(block, cutlass_coop.ThreadGroup[Literal["block"]])
     assert_type(values, cutlass_coop.ThreadData[np.int32])
     assert_type(values[0], np.int32)
-    assert_type(cutlass_coop.load(block, source, values), None)
+    assert_type(cutlass_coop.load(block, source, values, alignment=None), None)
     assert_type(cutlass_coop.store(block, destination, values), None)
     cutlass_coop.load(
         block,
@@ -180,7 +180,7 @@ def check_cutlass_warp_surface(source: object, destination: object) -> None:
 
     warp = cutlass_coop.this_warp()
     assert_type(
-        cutlass_coop.load(warp, source, items_per_thread=1),
+        cutlass_coop.load(warp, source, items_per_thread=1, alignment=16),
         cutlass_coop.ThreadData[Any],
     )
     values = cutlass_coop.ThreadData(items_per_thread=2, dtype=np.int32)
