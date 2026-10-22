@@ -49,6 +49,16 @@ def callback(left: Int32, right: Int32) -> Int32:
 
 scalar = Int32(1)
 values = cutlass_coop.ThreadData(items_per_thread=2, dtype=np.int32)
+cutlass_coop.load(block, object())  # expected-error: [call-overload]
+cutlass_coop.load(  # expected-error: [call-overload]
+    block, object(), values, items_per_thread=2
+)
+cutlass_coop.load(  # expected-error: [call-overload]
+    block, object(), items_per_thread=1.5
+)
+cutlass_coop.load(  # expected-error: [call-overload]
+    block, object(), items_per_thread=2, oob_default=0
+)
 cutlass_coop.load(
     cutlass_coop.this_grid(),  # expected-error: [arg-type]
     object(),

@@ -37,15 +37,14 @@ def test_histogram_accumulation_example():
     @cuda.jit
     def histogram_tiles(source, tile_count, destination, items_per_thread):
         block = coop.this_block()
-        samples = coop.ThreadData(items_per_thread)
         total = coop.ThreadData(items_per_thread=2)
         for i in range(2):
             total[i] = np.int64(0)
         for tile in range(tile_count):
-            coop.load(
+            samples = coop.load(
                 block,
                 source,
-                samples,
+                items_per_thread=items_per_thread,
                 offset=tile * cuda.blockDim.x * items_per_thread,
             )
             counts = coop.histogram(

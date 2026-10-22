@@ -45,6 +45,104 @@ _TILE = _THREADS * _ITEMS
 
 
 @pytest.mark.parametrize("api", _APIS, ids=("common", "qualified"))
+@pytest.mark.parametrize("items_per_thread", (1, 4))
+@pytest.mark.parametrize("tiles", (1, 3), ids=("zero-trip", "sliding-window"))
+def test_returned_payload_helpers_aliases_and_register_exports(
+    api, items_per_thread, tiles
+):
+    """Keep prior loads across rebinding and independent register copies."""
+
+    @cute.jit
+    def load_tile(
+        source: cute.Pointer,
+        offset: cutlass.Int32,
+        items_per_thread: cutlass.Constexpr,
+    ):
+        return api.load(
+            api.this_block(),
+            source,
+            items_per_thread=items_per_thread,
+            offset=offset,
+        )
+
+    @cute.kernel
+    def kernel(
+        source: cute.Pointer,
+        destination: cute.Pointer,
+        tiles: cutlass.Int32,
+        items_per_thread: cutlass.Constexpr,
+    ):
+        block = api.this_block()
+        tile_items = _THREADS * items_per_thread
+        output = cute.make_tensor(destination, cute.make_layout(7 * tile_items))
+        thread = cute.arch.thread_idx()[0]
+        first = load_tile(source, cutlass.Int32(0), items_per_thread)
+        values = first
+        previous = first
+        for tile in range(1, tiles):
+            values = load_tile(source, tile * tile_items, items_per_thread)
+            for item in cutlass.range_constexpr(items_per_thread):
+                index = thread * items_per_thread + item
+                output[(4 + tile) * tile_items + index] = (
+                    values[item] - previous[item]
+                )
+            previous = values
+        vector = values.to_tensor_ssa()
+        registers = values.to_register_tensor()
+        registers[0] = registers[0] + 100
+        for item in cutlass.range_constexpr(items_per_thread):
+            index = thread * items_per_thread + item
+            output[index] = first[item]
+            output[tile_items + index] = values[item]
+            output[2 * tile_items + index] = vector[item]
+            output[3 * tile_items + index] = registers[item]
+
+        # The output form still infers dtype and updates the caller's aliases.
+        reused = api.ThreadData(items_per_thread)
+        alias = reused
+        assert api.load(block, source, reused) is None
+        assert api.load(block, source, reused, offset=tile_items) is None
+        api.store(block, destination, alias, offset=4 * tile_items)
+
+    @cute.jit
+    def launch(
+        source: cute.Pointer,
+        destination: cute.Pointer,
+        tiles: cutlass.Int32,
+        items_per_thread: cutlass.Constexpr,
+    ):
+        kernel(source, destination, tiles, items_per_thread).launch(
+            grid=1, block=_THREADS
+        )
+
+    tile_items = _THREADS * items_per_thread
+    source = values_for(np.int32, 3 * tile_items)
+    destination = np.zeros(7 * tile_items, dtype=np.int32)
+    last = source[(tiles - 1) * tile_items : tiles * tile_items]
+    changed = last.copy().reshape(_THREADS, items_per_thread)
+    changed[:, 0] += 100
+    differences = np.zeros((2, tile_items), dtype=np.int32)
+    for tile in range(1, tiles):
+        differences[tile - 1] = (
+            source[tile * tile_items : (tile + 1) * tile_items]
+            - source[(tile - 1) * tile_items : tile * tile_items]
+        )
+    expected = np.concatenate(
+        (
+            source[:tile_items],
+            last,
+            last,
+            changed.ravel(),
+            source[tile_items : 2 * tile_items],
+            differences.ravel(),
+        )
+    )
+    with device_array(source) as src, device_array(destination) as dst:
+        launch(src, dst, cutlass.Int32(tiles), items_per_thread)
+    np.testing.assert_array_equal(destination, expected)
+
+
+@pytest.mark.parametrize("api", _APIS, ids=("common", "qualified"))
 @pytest.mark.parametrize("dtype", NUMPY_DTYPES)
 @pytest.mark.parametrize("operation", ("load", "store"))
 @pytest.mark.parametrize("items_per_thread", (1, 4))
@@ -81,13 +179,14 @@ def test_direct_layout_matches_independent_oracle(
             ),
             value_type,
         )
-        payload = api.ThreadData(items_per_thread, dtype=value_type)
         if cutlass.const_expr(operation == "load"):
-            returned = api.load(api.this_block(), inputs, payload)
-            assert returned is None
+            payload = api.load(
+                api.this_block(), inputs, items_per_thread=items_per_thread
+            )
             for item in cutlass.range_constexpr(items_per_thread):
                 outputs[thread * items_per_thread + item] = payload[item]
         else:
+            payload = api.ThreadData(items_per_thread)
             for item in cutlass.range_constexpr(items_per_thread):
                 payload[item] = inputs[thread * items_per_thread + item]
             api.store(api.this_block(), outputs, payload)
@@ -133,21 +232,20 @@ def test_partial_load_valid_items_and_explicit_default(
         count: cutlass.Int32,
         items_per_thread: cutlass.Constexpr,
     ):
-        payload = api.ThreadData(items_per_thread, dtype=cutlass.Int32)
         if cutlass.const_expr(runtime_valid):
-            api.load(
+            payload = api.load(
                 api.this_block(),
                 source,
-                payload,
+                items_per_thread=items_per_thread,
                 valid_items=count,
                 oob_default=default,
                 offset=3,
             )
         else:
-            api.load(
+            payload = api.load(
                 api.this_block(),
                 source,
-                payload,
+                items_per_thread=items_per_thread,
                 valid_items=valid,
                 oob_default=default,
                 offset=3,
@@ -201,8 +299,9 @@ def test_partial_store_respects_runtime_offsets_and_tail(valid, runtime_valid):
         offset: cutlass.Int64,
         items_per_thread: cutlass.Constexpr,
     ):
-        payload = coop.ThreadData(items_per_thread)
-        coop.load(coop.this_block(), source, payload)
+        payload = coop.load(
+            coop.this_block(), source, items_per_thread=items_per_thread
+        )
         if cutlass.const_expr(runtime_valid):
             coop.store(
                 coop.this_block(),
@@ -258,11 +357,10 @@ def test_runtime_load_default_and_offset_change_between_launches():
         offset: cutlass.Int64,
         items_per_thread: cutlass.Constexpr,
     ):
-        payload = coop.ThreadData(items_per_thread)
-        coop.load(
+        payload = coop.load(
             coop.this_block(),
             source,
-            payload,
+            items_per_thread=items_per_thread,
             valid_items=count,
             oob_default=default,
             offset=offset,
@@ -356,8 +454,9 @@ def test_final_cubin_eliminates_direct_providers_and_scratch(tmp_path):
         destination: cute.Pointer,
         items_per_thread: cutlass.Constexpr,
     ):
-        payload = coop.ThreadData(items_per_thread)
-        coop.load(coop.this_block(), source, payload)
+        payload = coop.load(
+            coop.this_block(), source, items_per_thread=items_per_thread
+        )
         coop.store(coop.this_block(), destination, payload)
 
     @cute.jit

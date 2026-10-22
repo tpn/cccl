@@ -67,15 +67,18 @@ def test_width_layout(api, width, algorithm, operation, items_per_thread):
             destination, cute.make_layout((_THREADS * items_per_thread) + 3)
         )
         group = api.this_warp().group_by(width)
-        payload = api.ThreadData(items_per_thread, dtype=cutlass.Int32)
         if cutlass.const_expr(operation == "load"):
-            returned = api.load(
-                group, inputs, payload, algorithm=algorithm, offset=3
+            payload = api.load(
+                group,
+                inputs,
+                items_per_thread=items_per_thread,
+                algorithm=algorithm,
+                offset=3,
             )
-            assert returned is None
             for item in cutlass.range_constexpr(items_per_thread):
                 outputs[thread * items_per_thread + item] = payload[item]
         else:
+            payload = api.ThreadData(items_per_thread)
             for item in cutlass.range_constexpr(items_per_thread):
                 payload[item] = inputs[thread * items_per_thread + item]
             api.store(group, outputs, payload, algorithm=algorithm, offset=3)
@@ -137,11 +140,10 @@ def test_group_controls(api, algorithm, exhaustive):
         seeds = cute.make_tensor(initial, cute.make_layout(_BLOCK_TILE))
         results = cute.make_tensor(observed, cute.make_layout(_BLOCK_TILE))
         group = api.this_warp().group_by(width, exhaustive=exhaustive)
-        loaded = api.ThreadData(items_per_thread)
-        api.load(
+        loaded = api.load(
             group,
             source,
-            loaded,
+            items_per_thread=items_per_thread,
             algorithm=algorithm,
             valid_items=valid,
             oob_default=cutlass.Int32(-200 - index),
@@ -241,11 +243,10 @@ def test_partial_transpose_loads_valid_items_without_default(api, width):
         index = thread // width
         valid = cute.make_tensor(counts, cute.make_layout(groups))[index]
         outputs = cute.make_tensor(observed, cute.make_layout(_BLOCK_TILE))
-        payload = api.ThreadData(items_per_thread, dtype=cutlass.Int32)
-        api.load(
+        payload = api.load(
             api.this_warp().group_by(width),
             source,
-            payload,
+            items_per_thread=items_per_thread,
             algorithm="transpose",
             valid_items=valid,
         )
@@ -314,11 +315,10 @@ def test_transpose_loop(api, width, divergent):
         if selected or not divergent:
             group = api.this_warp().group_by(width)
             for tile in range(tiles):
-                payload = api.ThreadData(items_per_thread)
-                api.load(
+                payload = api.load(
                     group,
                     source,
-                    payload,
+                    items_per_thread=items_per_thread,
                     algorithm="transpose",
                     offset=tile * _BLOCK_TILE,
                 )
@@ -393,8 +393,12 @@ def test_final_cubin(tmp_path, width, algorithm):
         items_per_thread: cutlass.Constexpr,
     ):
         group = cutlass_coop.this_warp().group_by(width)
-        payload = cutlass_coop.ThreadData(items_per_thread)
-        cutlass_coop.load(group, source, payload, algorithm=algorithm)
+        payload = cutlass_coop.load(
+            group,
+            source,
+            items_per_thread=items_per_thread,
+            algorithm=algorithm,
+        )
         cutlass_coop.store(group, destination, payload, algorithm=algorithm)
 
     @cute.jit

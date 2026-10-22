@@ -86,8 +86,7 @@ def test_inclusive_sum_example():
     @cuda.jit
     def sum_tile(source, destination, original, items_per_thread):
         block = coop.this_block()
-        items = coop.ThreadData(items_per_thread)
-        coop.load(block, source, items)
+        items = coop.load(block, source, items_per_thread=items_per_thread)
         prefixes = coop.inclusive_sum(block, items, algorithm="raking_memoize")
         coop.store(block, destination, prefixes)
         coop.store(block, original, items)

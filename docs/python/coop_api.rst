@@ -71,6 +71,11 @@ Not every primitive supports every available group.
 Payloads and temporary storage
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+``load(..., items_per_thread=N)`` returns a per-thread ``ThreadData`` payload.
+Construct ``ThreadData`` directly for computed values, explicit alignment,
+or an existing output. Thread-group descriptors describe the participating
+threads.
+
 .. autofunction:: ThreadData
 
 .. autoclass:: ThreadDataLike
@@ -293,10 +298,11 @@ and the extensions documented below:
    import cuda.coop.cutlass as cutlass_coop
 
 Group construction, synchronization, Load/Store, and temporary storage follow
-the :ref:`Common API <coop-common-api>`. Load fills a ``ThreadData``; Store
-writes a ``ThreadData`` or one scalar per thread. Use the qualified conversion
-methods below to build a payload from a CuTe register tensor before Store,
-or to get a register tensor after Load.
+the :ref:`Common API <coop-common-api>`. Load returns a ``ThreadData`` when
+given ``items_per_thread``, or fills an existing output. Store writes a
+``ThreadData`` or one scalar per thread. Use the qualified conversion methods
+below to build a payload from a CuTe register tensor before Store, or to get
+a register tensor after Load.
 
 Qualified Reduce and Sum accept register tensors and ``TensorSSA`` values
 directly. Inside the kernel they return CuTe scalars, even when a NumPy dtype

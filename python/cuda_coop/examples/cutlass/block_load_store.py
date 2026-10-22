@@ -61,11 +61,10 @@ def run_example(api="common", items_per_thread=2):
         load_valid_items = tile_size - 19
         store_valid_items = tile_size - 11
         block = coop.this_block()
-        payload = coop.ThreadData(items_per_thread)
-        coop.load(
+        payload = coop.load(
             block,
             source,
-            payload,
+            items_per_thread=items_per_thread,
             valid_items=load_valid_items,
             oob_default=_DEFAULT,
             offset=_LOAD_OFFSET,

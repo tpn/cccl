@@ -50,8 +50,12 @@ def test_algorithm_selector_spellings(api, algorithm, items_per_thread):
     @cute.kernel
     def kernel(memory: cute.Pointer, items_per_thread: cutlass.Constexpr):
         group = api.this_block()
-        payload = api.ThreadData(items_per_thread, dtype=cutlass.Int32)
-        api.load(group, memory, payload, algorithm=algorithm)
+        payload = api.load(
+            group,
+            memory,
+            items_per_thread=items_per_thread,
+            algorithm=algorithm,
+        )
         api.store(group, memory, payload, algorithm=algorithm)
 
     @cute.jit
@@ -74,6 +78,7 @@ def test_algorithm_selector_spellings(api, algorithm, items_per_thread):
         ("store-dtype", "dtype"),
         ("scalar-dtype", "dtype"),
         ("boolean-count", "integer"),
+        ("dynamic-items", "integer"),
         ("float-offset", "integer"),
         ("negative-offset", "non-negative"),
         ("too-many-valid", "valid_items"),
@@ -106,6 +111,12 @@ def test_invalid_movement_inputs(case, message):
                 memory,
                 cutlass_coop.ThreadData(items_per_thread=1),
                 valid_items=True,
+            )
+        elif cutlass.const_expr(case == "dynamic-items"):
+            cutlass_coop.load(
+                group,
+                memory,
+                items_per_thread=cute.arch.thread_idx()[0] + 1,
             )
         elif cutlass.const_expr(case == "float-offset"):
             cutlass_coop.load(

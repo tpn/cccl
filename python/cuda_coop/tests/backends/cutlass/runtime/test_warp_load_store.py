@@ -87,17 +87,15 @@ def test_group_local_load_counts_offsets_and_defaults(
         count = valid - warp * 7
         if count < 0:
             count = cutlass.Int32(0)
-        payload = api.ThreadData(items_per_thread)
-        returned = api.load(
+        payload = api.load(
             api.this_warp(),
             source,
-            payload,
+            items_per_thread=items_per_thread,
             algorithm=algorithm,
             valid_items=count,
             oob_default=cutlass.Int32(-29 - warp),
             offset=cutlass.Int64(3 + warp * 2),
         )
-        assert returned is None
         outputs = cute.make_tensor(observed, cute.make_layout(_BLOCK_TILE))
         for item in cutlass.range_constexpr(items_per_thread):
             outputs[thread * items_per_thread + item] = payload[item]
@@ -235,12 +233,17 @@ def test_warp_layout_for_every_dtype(
             ),
             value_type,
         )
-        payload = api.ThreadData(items_per_thread, dtype=value_type)
         if cutlass.const_expr(operation == "load"):
-            api.load(api.this_warp(), inputs, payload, algorithm=algorithm)
+            payload = api.load(
+                api.this_warp(),
+                inputs,
+                items_per_thread=items_per_thread,
+                algorithm=algorithm,
+            )
             for item in cutlass.range_constexpr(items_per_thread):
                 outputs[thread * items_per_thread + item] = payload[item]
         else:
+            payload = api.ThreadData(items_per_thread)
             for item in cutlass.range_constexpr(items_per_thread):
                 payload[item] = inputs[thread * items_per_thread + item]
             api.store(api.this_warp(), outputs, payload, algorithm=algorithm)
@@ -288,22 +291,21 @@ def test_partial_transpose_loads_each_warps_valid_items_without_default(
         x, y, z = cute.arch.thread_idx()
         thread = x + _BLOCK[0] * (y + _BLOCK[1] * z)
         outputs = cute.make_tensor(observed, cute.make_layout(_BLOCK_TILE))
-        payload = api.ThreadData(items_per_thread, dtype=cutlass.Int32)
         if cutlass.const_expr(static_count):
-            api.load(
+            payload = api.load(
                 api.this_warp(),
                 source,
-                payload,
+                items_per_thread=items_per_thread,
                 algorithm="transpose",
                 valid_items=valid,
             )
         else:
-            api.load(
+            payload = api.load(
                 api.this_warp(),
                 source,
-                payload,
+                items_per_thread=items_per_thread,
                 algorithm="transpose",
-                valid_items=count - (thread // _WIDTH) * 13,
+                valid_items=count - thread // _WIDTH * 13,
             )
         selected_count = (
             valid if static_count else count - (thread // _WIDTH) * 13
@@ -362,11 +364,10 @@ def test_transpose_runtime_loop_and_whole_warp_divergence(api, divergent):
         warp = thread // _WIDTH
         if warp == 1 or not divergent:
             for tile in range(tiles):
-                payload = api.ThreadData(items_per_thread)
-                api.load(
+                payload = api.load(
                     api.this_warp(),
                     source,
-                    payload,
+                    items_per_thread=items_per_thread,
                     algorithm="transpose",
                     offset=tile * _BLOCK_TILE,
                 )
@@ -434,9 +435,11 @@ def test_final_warp_cubin_has_no_block_barrier(tmp_path, algorithm):
         destination: cute.Pointer,
         items_per_thread: cutlass.Constexpr,
     ):
-        payload = cutlass_coop.ThreadData(items_per_thread)
-        cutlass_coop.load(
-            cutlass_coop.this_warp(), source, payload, algorithm=algorithm
+        payload = cutlass_coop.load(
+            cutlass_coop.this_warp(),
+            source,
+            items_per_thread=items_per_thread,
+            algorithm=algorithm,
         )
         cutlass_coop.store(
             cutlass_coop.this_warp(), destination, payload, algorithm=algorithm

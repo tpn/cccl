@@ -31,14 +31,19 @@ def independent_primitives(source, ordered, prefixes, items_per_thread):
     block = coop.this_block()
     scan_scratch = coop.TempStorage(auto_sync=False)
     sort_scratch = coop.TempStorage(auto_sync=False)
-    items = coop.ThreadData(items_per_thread)
     for tile in range(TILES_PER_BLOCK):
         offset = (
             (cuda.blockIdx.x * TILES_PER_BLOCK + tile)
             * cuda.blockDim.x
             * items_per_thread
         )
-        coop.load(block, source, items, offset=offset, algorithm="direct")
+        items = coop.load(
+            block,
+            source,
+            items_per_thread=items_per_thread,
+            offset=offset,
+            algorithm="direct",
+        )
         scanned = coop.exclusive_sum(block, items, temp_storage=scan_scratch)
         sorted_items = coop.merge_sort_keys(block, items, temp_storage=sort_scratch)
         coop.store(block, prefixes, scanned, offset=offset, algorithm="direct")
@@ -52,17 +57,16 @@ def independent_primitives(source, ordered, prefixes, items_per_thread):
 def shared_auto(source, ordered, items_per_thread):
     block = coop.this_block()
     scratch = coop.TempStorage(auto_sync=True)
-    items = coop.ThreadData(items_per_thread)
     for tile in range(TILES_PER_BLOCK):
         offset = (
             (cuda.blockIdx.x * TILES_PER_BLOCK + tile)
             * cuda.blockDim.x
             * items_per_thread
         )
-        coop.load(
+        items = coop.load(
             block,
             source,
-            items,
+            items_per_thread=items_per_thread,
             offset=offset,
             algorithm="transpose",
             temp_storage=scratch,
@@ -84,17 +88,16 @@ def shared_auto(source, ordered, items_per_thread):
 def shared_manual(source, ordered, items_per_thread):
     block = coop.this_block()
     scratch = coop.TempStorage(auto_sync=False)
-    items = coop.ThreadData(items_per_thread)
     for tile in range(TILES_PER_BLOCK):
         offset = (
             (cuda.blockIdx.x * TILES_PER_BLOCK + tile)
             * cuda.blockDim.x
             * items_per_thread
         )
-        coop.load(
+        items = coop.load(
             block,
             source,
-            items,
+            items_per_thread=items_per_thread,
             offset=offset,
             algorithm="transpose",
             temp_storage=scratch,
@@ -117,17 +120,16 @@ def shared_manual(source, ordered, items_per_thread):
 def exclusive(source, ordered, items_per_thread):
     block = coop.this_block()
     scratch = coop.TempStorage(sharing="exclusive", auto_sync=False)
-    items = coop.ThreadData(items_per_thread)
     for tile in range(TILES_PER_BLOCK):
         offset = (
             (cuda.blockIdx.x * TILES_PER_BLOCK + tile)
             * cuda.blockDim.x
             * items_per_thread
         )
-        coop.load(
+        items = coop.load(
             block,
             source,
-            items,
+            items_per_thread=items_per_thread,
             offset=offset,
             algorithm="transpose",
             temp_storage=scratch,

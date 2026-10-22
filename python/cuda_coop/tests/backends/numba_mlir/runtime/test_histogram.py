@@ -53,11 +53,10 @@ def test_histogram_counts_preservation_and_padding(
     @cuda.jit
     def kernel(source, destination, preserved, items_per_thread):
         block = coop.this_block()
-        samples = coop.ThreadData(items_per_thread)
-        coop.load(
+        samples = coop.load(
             block,
             source,
-            samples,
+            items_per_thread=items_per_thread,
             offset=cuda.blockIdx.x * cuda.blockDim.x * items_per_thread,
         )
         counts = coop.histogram(
@@ -130,8 +129,7 @@ def test_fresh_calls_reuse_storage(
     @cuda.jit
     def kernel(source, destination, items_per_thread):
         block = coop.this_block()
-        samples = coop.ThreadData(items_per_thread, dtype=np.int32)
-        coop.load(block, source, samples)
+        samples = coop.load(block, source, items_per_thread=items_per_thread)
         scratch = coop.TempStorage(auto_sync=auto_sync)
         first = coop.histogram(
             block,

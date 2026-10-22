@@ -70,9 +70,10 @@ least ``128 * items_per_thread`` source and destination elements per block.
 .. code-block:: python
 
    block = coop.this_block()
-   items = coop.ThreadData(items_per_thread)
    offset = block_index * 128 * items_per_thread
-   coop.load(block, source, items, offset=offset)
+   items = coop.load(
+       block, source, items_per_thread=items_per_thread, offset=offset
+   )
    shifted = coop.shuffle(block, items, mode="up")
    for item in range(items_per_thread):
        position = thread_rank * items_per_thread + item

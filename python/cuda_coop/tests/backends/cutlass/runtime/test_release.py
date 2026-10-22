@@ -71,11 +71,10 @@ def test_release_after_primitive_and_fresh_loop_instance(
         output = cute.make_tensor(destination, cute.make_layout(128))
         for iteration in range(2):
             storage = coop.TempStorage(auto_sync=auto_sync)
-            values = coop.ThreadData(items_per_thread)
-            coop.load(
+            values = coop.load(
                 coop.this_block(),
                 source,
-                values,
+                items_per_thread=items_per_thread,
                 algorithm="transpose",
                 temp_storage=storage,
             )

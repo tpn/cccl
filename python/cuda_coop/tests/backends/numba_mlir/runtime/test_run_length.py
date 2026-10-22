@@ -76,10 +76,10 @@ def test_windows_preserve_inputs_and_zero_invalid_slots(
         items_per_thread,
     ):
         block = api.this_block()
-        run_values = api.ThreadData(items_per_thread)
-        run_lengths = api.ThreadData(items_per_thread)
-        api.load(block, values, run_values)
-        api.load(block, lengths, run_lengths)
+        run_values = api.load(block, values, items_per_thread=items_per_thread)
+        run_lengths = api.load(
+            block, lengths, items_per_thread=items_per_thread
+        )
         decoded = api.run_length_decode(
             block,
             run_values,
@@ -223,10 +223,10 @@ def test_uint64_decode_above_uint32_range_without_large_allocation(
         items_per_thread,
     ):
         block = numba_coop.this_block()
-        runs = numba_coop.ThreadData(items_per_thread)
-        sizes = numba_coop.ThreadData(items_per_thread)
-        numba_coop.load(block, values, runs)
-        numba_coop.load(block, lengths, sizes)
+        runs = numba_coop.load(block, values, items_per_thread=items_per_thread)
+        sizes = numba_coop.load(
+            block, lengths, items_per_thread=items_per_thread
+        )
         relative = numba_coop.ThreadData(items_per_thread=2, dtype=np.uint64)
         total = numba_coop.ThreadData(items_per_thread=1, dtype=np.uint64)
         decoded = numba_coop.run_length_decode(
@@ -316,10 +316,8 @@ def test_bulk_multiple_windows_partial_final_window_and_empty(
     ):
         block = api.this_block()
         scratch = api.TempStorage(auto_sync=True)
-        runs = api.ThreadData(items_per_thread)
-        sizes = api.ThreadData(items_per_thread)
-        api.load(block, values, runs)
-        api.load(block, lengths, sizes)
+        runs = api.load(block, values, items_per_thread=items_per_thread)
+        sizes = api.load(block, lengths, items_per_thread=items_per_thread)
         if qualified:
             total = api.run_length_decode_into(
                 block,

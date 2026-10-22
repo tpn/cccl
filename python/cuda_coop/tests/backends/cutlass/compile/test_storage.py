@@ -32,11 +32,10 @@ def test_undersized_storage_is_rejected_before_kernel_execution(
     @cute.kernel
     def kernel(memory: cute.Pointer):
         storage = cutlass_coop.TempStorage(1, sharing=sharing)
-        payload = cutlass_coop.ThreadData(items_per_thread=4)
         cutlass_coop.load(
             cutlass_coop.this_block(),
             memory,
-            payload,
+            items_per_thread=4,
             algorithm=algorithm,
             temp_storage=storage,
         )

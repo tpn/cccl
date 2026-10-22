@@ -327,8 +327,7 @@ def test_rank_runtime_start_reuses_compilation(device_begin, items_per_thread):
     @cuda.jit
     def kernel(source, output, prefixes, controls, begin, items_per_thread):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         if device_begin:
             prefix = numba_coop.ThreadData(items_per_thread=2)
             ranks = numba_coop.radix_rank_keys(

@@ -50,6 +50,10 @@ def check_cutlass_surface(source: object, destination: object) -> None:
     """
 
     block = cutlass_coop.this_block()
+    loaded = cutlass_coop.load(block, source, items_per_thread=2)
+    assert_type(loaded, cutlass_coop.ThreadData[Any])
+    loaded.to_tensor_ssa()
+    loaded.to_register_tensor()
     values = cutlass_coop.ThreadData(
         items_per_thread=2, dtype=np.int32, alignment=16
     )
@@ -175,6 +179,10 @@ def check_cutlass_warp_surface(source: object, destination: object) -> None:
     """
 
     warp = cutlass_coop.this_warp()
+    assert_type(
+        cutlass_coop.load(warp, source, items_per_thread=1),
+        cutlass_coop.ThreadData[Any],
+    )
     values = cutlass_coop.ThreadData(items_per_thread=2, dtype=np.int32)
     assert_type(warp, cutlass_coop.ThreadGroup[Literal["warp"]])
     assert_type(cutlass_coop.load(warp, source, values), None)
@@ -210,6 +218,16 @@ def check_cutlass_logical_warp_surface(
     values = cutlass_coop.ThreadData(items_per_thread=2, dtype=np.int32)
     for width in (1, 2, 4, 8, 16, 32):
         group = cutlass_coop.this_warp().group_by(width)
+        assert_type(
+            cutlass_coop.load(
+                group,
+                source,
+                items_per_thread=2,
+                valid_items=width,
+                oob_default=0,
+            ),
+            cutlass_coop.ThreadData[Any],
+        )
         assert_type(
             group, cutlass_coop.ThreadGroup[Literal["threads_within_warp"]]
         )

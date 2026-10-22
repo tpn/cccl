@@ -32,9 +32,8 @@ def test_merge_sort_example(items_per_thread):
     ):
         block = coop.this_block()
         valid_items = 64 * items_per_thread - 3
-        keys = coop.ThreadData(items_per_thread)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         indices = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys)
         for item in cutlass.range_constexpr(items_per_thread):
             indices[item] = cutlass.Int32(
                 block.rank() * items_per_thread + item

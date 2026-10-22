@@ -67,7 +67,6 @@ def _run(
     ):
         block_group = api.this_block()
         warp = api.this_warp().group_by(width)
-        values = api.ThreadData(items_per_thread)
         source_tensor = cute.recast_tensor(
             cute.make_tensor(
                 source, cute.make_layout(threads * items_per_thread)
@@ -80,7 +79,9 @@ def _run(
             ),
             dtype=value_type,
         )
-        api.load(block_group, source_tensor, values)
+        values = api.load(
+            block_group, source_tensor, items_per_thread=items_per_thread
+        )
         thread = block_group.rank()
         output_tensor = cute.recast_tensor(
             cute.make_tensor(

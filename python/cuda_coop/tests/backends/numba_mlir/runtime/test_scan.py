@@ -209,11 +209,10 @@ def test_block_algorithms_scan_thread_data_out_of_place(
 @cuda.jit
 def _scan_one_element_of_a_loaded_tile(source, output, items_per_thread):
     thread = cuda.threadIdx.x
-    payload = root_coop.ThreadData(items_per_thread, dtype=types.int32)
-    root_coop.load(
+    payload = root_coop.load(
         root_coop.this_block(),
         source,
-        payload,
+        items_per_thread=items_per_thread,
         algorithm="transpose",
     )
     # An integer subscript of the loaded payload selects one scalar element.

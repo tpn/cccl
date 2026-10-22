@@ -50,8 +50,7 @@ def run_example(api="common", items_per_thread=3):
     ):
         group = coop.this_block()
         thread = group.rank()
-        payload = coop.ThreadData(items_per_thread)
-        coop.load(group, source, payload)
+        payload = coop.load(group, source, items_per_thread=items_per_thread)
         striped = coop.exchange(group, payload, mode="blocked_to_striped")
         shifted = coop.shuffle(group, striped, mode="down")
         # Shuffle leaves one boundary undefined; initialize it before storing.

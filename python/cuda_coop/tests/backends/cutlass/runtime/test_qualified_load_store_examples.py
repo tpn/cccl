@@ -30,11 +30,10 @@ def test_load_store_example(items_per_thread):
     ):
         block = coop.this_block()
         valid_items = 64 * items_per_thread - 3
-        values = coop.ThreadData(items_per_thread)
-        coop.load(
+        values = coop.load(
             block,
             source,
-            values,
+            items_per_thread=items_per_thread,
             valid_items=valid_items,
             oob_default=0,
             offset=5,

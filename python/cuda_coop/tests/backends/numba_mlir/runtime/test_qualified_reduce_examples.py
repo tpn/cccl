@@ -32,8 +32,7 @@ def test_qualified_reduce_example():
     @cuda.jit
     def tile_maximum(source, output, items_per_thread):
         block = coop.this_block()
-        items = coop.ThreadData(items_per_thread)
-        coop.load(block, source, items)
+        items = coop.load(block, source, items_per_thread=items_per_thread)
         result = coop.reduce(block, items, binary_op=maximum)
         # Custom reductions define the result at group rank zero.
         if block.rank() == 0:

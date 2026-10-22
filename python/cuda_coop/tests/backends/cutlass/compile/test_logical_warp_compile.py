@@ -108,11 +108,10 @@ def test_logical_warp_compile(width, algorithm, api, items_per_thread):
         items_per_thread: cutlass.Constexpr,
     ):
         group = api.this_warp().group_by(width)
-        payload = api.ThreadData(items_per_thread, dtype=cutlass.Int32)
-        api.load(
+        payload = api.load(
             group,
             source,
-            payload,
+            items_per_thread=items_per_thread,
             algorithm=algorithm,
             valid_items=items_per_thread * width - 1,
             oob_default=-13,

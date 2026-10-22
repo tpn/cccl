@@ -96,12 +96,11 @@ def test_explicit_scratch_reused_by_load_reduce_store(
         scratch = api.TempStorage(
             size_in_bytes, sharing=sharing, auto_sync=auto_sync
         )
-        payload = api.ThreadData(items_per_thread)
         for tile in range(tiles):
-            api.load(
+            payload = api.load(
                 block,
                 source,
-                payload,
+                items_per_thread=items_per_thread,
                 offset=tile * tile_size,
                 algorithm="transpose",
                 temp_storage=scratch,
