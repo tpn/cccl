@@ -36,6 +36,7 @@ from ._payload import (
     TempStorageLike,
     ThreadDataLike,
     _common_thread_data_extent,
+    _normalize_alignment,
     _ReadableThreadDataLike,
     _validate_common_integer_value,
     _validate_common_numeric_scalar,
@@ -166,6 +167,7 @@ def load(
     /,
     *,
     items_per_thread: int | None = None,
+    alignment: int | None = None,
     algorithm: BlockLoadStoreAlgorithm | WarpLoadStoreAlgorithm = "direct",
     valid_items: ValidItems | None = None,
     oob_default: _CommonNumericT | float | None = None,
@@ -194,10 +196,21 @@ def load(
         Writable :ref:`per-thread payload <coop-common-payloads>`.
         Load populates this payload in place. The group's tile contains
         ``group_size * items_per_thread`` elements.
+        Omit ``items_per_thread`` and leave ``alignment=None`` when supplying
+        this destination. Use this form when aliases must observe the update
+        or the destination needs a lifetime established before this call.
     items_per_thread : int, optional
-        Positive compile-time number of items per thread. Supply this instead
-        of ``output`` to return a fresh payload. One item still returns a
-        ``ThreadData`` payload, not a scalar.
+        Positive compile-time number of values returned for each thread.
+        Required when ``output`` is omitted. Even a count of one returns a
+        payload with indexed reads and writes, rather than a scalar.
+    alignment : int, optional
+        Compile-time minimum alignment in bytes for the returned payload,
+        with the same positive power-of-two rules as :func:`ThreadData`.
+        ``None`` lets the compiler choose; it may strengthen an explicit
+        request. Requires the ``items_per_thread`` form. For an existing
+        ``output``, specify alignment when constructing that payload instead.
+        This does not assert alignment of ``source`` or change scratch
+        alignment, which is configured through ``temp_storage``.
     algorithm : str, optional
         Compile-time load algorithm, default ``"direct"``. ``"direct"`` gives
         each thread consecutive elements (blocked order); ``"striped"`` gives
@@ -279,6 +292,7 @@ def load(
             )
         if items_per_thread <= 0:
             raise ValueError("cuda.coop.load items_per_thread must be positive")
+        alignment = _normalize_alignment(alignment)
     elif items_per_thread is not None:
         raise TypeError(
             "cuda.coop.load accepts output or items_per_thread, not both"
@@ -290,6 +304,11 @@ def load(
             output,
             allow_untyped_thread_data=True,
             require_thread_data=True,
+        )
+    if output is not None and alignment is not None:
+        raise TypeError(
+            "cuda.coop.load alignment requires items_per_thread and no output; "
+            "set alignment when constructing the output instead"
         )
     _validate_common_load_store_options(
         "load",
@@ -309,6 +328,7 @@ def load(
         source,
         output,
         items_per_thread=items_per_thread,
+        alignment=alignment,
         algorithm=algorithm,
         valid_items=valid_items,
         oob_default=oob_default,

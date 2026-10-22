@@ -200,18 +200,25 @@ launchers declare it as ``items_per_thread: cutlass.Constexpr``. A count of
 one still returns a payload.
 
 Use ``coop.ThreadData(items_per_thread)`` to construct a payload for computed
-values, an explicit output, or a minimum alignment request. The output form,
+values or an explicit output. The output form,
 ``coop.load(group, source, output)``, fills that existing payload and returns
 ``None``. Supply exactly one of ``output`` or ``items_per_thread``. Dtype-free
 ``ThreadData`` construction remains supported, including Numba-CUDA-MLIR's
-backward inference from later uses such as Store.
+backward inference from later uses such as Store. ``items_per_thread`` and
+``alignment`` are keyword-only. The third positional argument is always an
+output payload, so ``coop.load(group, source, 4)`` is invalid.
+A non-``None`` ``alignment`` is valid only with ``items_per_thread``; set an
+existing output's alignment when constructing it instead.
 
 Supported payload dtypes are signed and unsigned 8-, 16-, 32-, and 64-bit
 integers and 32- and 64-bit floating-point values. An explicit alignment is
 a positive power of two in bytes and sets a minimum when payload storage
 is materialized. It does not assert alignment of an input or output array.
-For example, ``coop.ThreadData(items_per_thread, alignment=16)`` requests
-at least 16-byte alignment; the compiler may use stronger alignment.
+For example,
+``coop.load(group, source, items_per_thread=items_per_thread, alignment=16)``
+requests at least 16-byte alignment for the returned payload, as does
+``coop.ThreadData(items_per_thread, alignment=16)`` for a directly constructed
+payload. ``None`` lets the compiler choose; it may use stronger alignment.
 
 The payload extent is a compile-time value available as
 ``items.items_per_thread``. Directly constructed slots start uninitialized.
