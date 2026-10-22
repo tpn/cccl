@@ -854,10 +854,10 @@ def check_batched_reduction_typing() -> None:
 def check_returning_load(source: object, destination: object) -> None:
     block = numba_coop.this_block()
     warp = numba_coop.this_warp()
-    returned = numba_coop.load(block, source, items_per_thread=4)
+    returned = numba_coop.load(block, source, items_per_thread=4, alignment=64)
     assert_type(returned, numba_coop.ThreadDataLike[Any])
     assert_type(
-        numba_coop.load(warp, source, items_per_thread=1),
+        numba_coop.load(warp, source, items_per_thread=1, alignment=None),
         numba_coop.ThreadDataLike[Any],
     )
     assert_type(
@@ -867,3 +867,4 @@ def check_returning_load(source: object, destination: object) -> None:
         numba_coop.ThreadDataLike[Any],
     )
     numba_coop.store(block, destination, returned)
+    assert_type(numba_coop.load(block, source, returned, alignment=None), None)

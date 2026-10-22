@@ -806,3 +806,23 @@ numba_coop.load(  # expected-error: [call-overload]
 numba_coop.load(  # expected-error: [call-overload]
     qualified_block, object(), items_per_thread=4, oob_default=0
 )
+common.load(common_block, object(), 4)  # expected-error: [call-overload]
+numba_coop.load(qualified_block, object(), 4)  # expected-error: [call-overload]
+common.load(  # expected-error: [call-overload]
+    common_block, object(), common_values, alignment=64
+)
+numba_coop.load(  # expected-error: [call-overload]
+    qualified_block, object(), values, alignment=64
+)
+common.load(  # expected-error: [call-overload]
+    common_block, object(), alignment=64
+)
+numba_coop.load(  # expected-error: [call-overload]
+    qualified_block, object(), alignment=64
+)
+common.load(  # expected-error: [call-overload]
+    common_block, object(), items_per_thread=4, alignment=1.5
+)
+numba_coop.load(  # expected-error: [call-overload]
+    qualified_block, object(), items_per_thread=4, alignment=1.5
+)
