@@ -268,9 +268,15 @@ scalar even when each thread contributes multiple items. Read results
 only at the positions or threads where the primitive defines them.
 
 Index payloads with compile-time integers and initialize each item before
-reading it. ``ThreadData(items_per_thread, alignment=16)`` requests at
-least 16-byte alignment when storage is materialized. Input and output memory
-alignment is separate. The compiler decides which values remain in registers
+reading it. ``coop.load(group, source, items_per_thread=N, alignment=16)``
+requests at least 16-byte alignment when the returned payload's storage is
+materialized. Its alignment follows ``ThreadData(N, alignment=16)``: a positive
+compile-time power of two, preserved across payload reconstruction and register
+exports. For an existing output, set the alignment on ``ThreadData`` and omit
+``alignment`` from Load (or pass ``None``). Load cannot change that output's
+storage policy. Input and output memory alignment is separate; the kwarg makes
+no promise about the source pointer, including a pointer with an element offset.
+The compiler decides which values remain in registers
 and which spill to local memory. The :ref:`qualified conversion methods
 <coop-cutlass-register-payloads>` connect payloads to CuTe register tensors
 and immutable register values.
@@ -355,8 +361,10 @@ alignment permit them, with direct accesses as a fallback.
 
 Direct, striped, and vectorized Load/Store use no shared scratch and need no
 scratch-reuse barrier, even when passed a ``TempStorage`` descriptor.
-``ThreadData(items_per_thread, alignment=...)`` requests a minimum payload
-alignment; it does not change the logical item layout.
+Returning Load's ``alignment=...`` and
+``ThreadData(items_per_thread, alignment=...)`` request a minimum payload
+alignment; neither changes the logical item layout or guarantees vectorized
+memory accesses.
 
 .. _coop-cutlass-storage:
 

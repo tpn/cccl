@@ -95,6 +95,7 @@ def load(
     /,
     *,
     items_per_thread: int | None = None,
+    alignment: int | None = None,
     algorithm: BlockLoadStoreAlgorithm | WarpLoadStoreAlgorithm = "direct",
     valid_items: ValidItems | None = None,
     oob_default: _CommonNumericT | float | None = None,
@@ -110,6 +111,12 @@ def load(
     ThreadData ``output`` to fill it in place and return ``None``. Its dtype
     is inferred from the source, or must agree with it when already declared.
     Supply exactly one of ``output`` and ``items_per_thread``.
+
+    With ``items_per_thread``, ``alignment`` requests a minimum power-of-two
+    byte alignment for the returned payload's materialized storage, as in
+    ``ThreadData``. An existing ``output`` retains its own alignment and
+    requires ``alignment=None``. This option does not describe the source
+    memory's alignment or change the selected item layout.
 
     Load populates the payload in the selected algorithm's layout. Beyond
     ``valid_items``, slots have unspecified values unless ``oob_default`` is
@@ -167,15 +174,19 @@ def load(
             )
         if _common_root_operation_name() == "load":
             with _common_root_operation_scope("ThreadData"):
-                output = ThreadData(items_per_thread)
+                output = ThreadData(items_per_thread, alignment=alignment)
         else:
-            output = ThreadData(items_per_thread)
+            output = ThreadData(items_per_thread, alignment=alignment)
     elif items_per_thread is not None:
         raise TypeError(
             f"{_SCOPE}.load accepts output or items_per_thread, not both"
         )
     if not isinstance(output, ThreadData):
         raise TypeError(f"{_SCOPE}.load output must be ThreadData")
+    if not returns_output and alignment is not None:
+        raise TypeError(
+            f"{_SCOPE}.load alignment requires items_per_thread and no output"
+        )
     if oob_default is not None and valid_items is None:
         raise ValueError(f"{_SCOPE}.load oob_default requires valid_items")
     group, launch, algorithm = _resolve_group(

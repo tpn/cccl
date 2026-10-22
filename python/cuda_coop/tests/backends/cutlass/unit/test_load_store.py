@@ -32,7 +32,8 @@ def cutlass_trace(monkeypatch):
     "api", (coop, cutlass_coop), ids=("common", "qualified")
 )
 @pytest.mark.parametrize("items_per_thread", (1, 4))
-def test_load_result_ownership(monkeypatch, api, items_per_thread):
+@pytest.mark.parametrize("alignment", (None, np.int64(1), 128))
+def test_load_result_ownership(monkeypatch, api, items_per_thread, alignment):
     """Fresh results remain independent; explicit output keeps its identity.
 
     The provider spy isolates facade behavior from memory access and code
@@ -62,10 +63,17 @@ def test_load_result_ownership(monkeypatch, api, items_per_thread):
     monkeypatch.setattr(lowering, "provider_load", provider_load)
     source = list(range(items_per_thread))
     group = api.this_block()
-    original = api.load(group, source, items_per_thread=items_per_thread)
+    original = api.load(
+        group,
+        source,
+        items_per_thread=items_per_thread,
+        alignment=alignment,
+    )
     assert isinstance(original, cutlass_coop.ThreadData)
     assert original.items_per_thread == items_per_thread
     assert original.dtype is np.int32
+    assert original.alignment == alignment
+    assert copy(original).alignment == alignment
     alias = original
     updated = [value + 10 for value in source]
     original = api.load(group, updated, items_per_thread=items_per_thread)
@@ -75,7 +83,7 @@ def test_load_result_ownership(monkeypatch, api, items_per_thread):
 
     output = api.ThreadData(items_per_thread, alignment=64)
     output_alias = output
-    assert api.load(group, source, output) is None
+    assert api.load(group, source, output, alignment=None) is None
     assert output is output_alias
     assert output.dtype is np.int32
     assert output.alignment == 64
@@ -97,6 +105,8 @@ def test_load_requires_one_extent_source(api):
         api.load(group, object())
     with pytest.raises(TypeError, match="output or items_per_thread"):
         api.load(group, object(), api.ThreadData(1), items_per_thread=1)
+    with pytest.raises(TypeError, match="ThreadData"):
+        api.load(group, object(), 4)
     for count, error in (
         (True, TypeError),
         (1.5, TypeError),
@@ -105,3 +115,37 @@ def test_load_requires_one_extent_source(api):
     ):
         with pytest.raises(error, match="items_per_thread"):
             api.load(group, object(), items_per_thread=count)
+
+
+@pytest.mark.parametrize(
+    "api", (coop, cutlass_coop), ids=("common", "qualified")
+)
+def test_load_alignment_requires_returned_payload(api):
+    group = api.this_block()
+    output = api.ThreadData(1, alignment=64)
+    for alignment in (16, 64):
+        with pytest.raises(TypeError, match="alignment"):
+            api.load(group, object(), output, alignment=alignment)
+    assert output.alignment == 64
+    with pytest.raises(TypeError, match="output or items_per_thread"):
+        api.load(group, object(), alignment=16)
+
+
+@pytest.mark.parametrize(
+    "api", (coop, cutlass_coop), ids=("common", "qualified")
+)
+@pytest.mark.parametrize(
+    "alignment,error",
+    (
+        (True, TypeError),
+        (1.5, TypeError),
+        (0, ValueError),
+        (-8, ValueError),
+        (3, ValueError),
+    ),
+)
+def test_load_alignment_invalid(api, alignment, error):
+    with pytest.raises(error, match="alignment"):
+        api.load(
+            api.this_block(), object(), items_per_thread=1, alignment=alignment
+        )
