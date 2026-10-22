@@ -9,6 +9,7 @@ backend installed. Each script checks its results against a host reference.
 | [nvmath_nvshmem.py](nvmath_nvshmem.py) | FFT and reduction with registered NVSHMEM shared scratch, a device transfer, and explicit completion and release. |
 | [nvmath_fft_shared.py](nvmath_fft_shared.py) | The FFT and reduction with ordinary static `cuda.shared.array` allocations. |
 | [nvmath_nvshmem_shared.py](nvmath_nvshmem_shared.py) | The complete FFT, reduction, and NVSHMEM kernel with ordinary static shared arrays. |
+| [mamba_selective_scan.py](mamba_selective_scan.py) | The Mamba v1 selective scan: a custom-operator block scan over packed affine pairs, with a carry across tiles, per-state shared carries, and fixed, variable, or grouped B/C. |
 
 ## Shared storage for device libraries
 
