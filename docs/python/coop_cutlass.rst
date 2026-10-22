@@ -13,8 +13,9 @@ Use ``cuda.coop`` inside a CuTe kernel to move data, reduce or scan values,
 rearrange payloads, sort or select keys, compare neighbors, count samples,
 and decode runs. The CUTLASS backend implements these operations with CUB. The :doc:`API reference <coop_api>` lists common and qualified calls.
 
-Each thread keeps its items in a ``ThreadData`` object. ``load`` fills that
-object and returns ``None``; ``store`` writes its items to memory. The examples
+Each thread keeps its items in a ``ThreadData`` object.
+``load(group, source, items_per_thread=N)`` returns that payload;
+``store`` writes its items to memory. The examples
 below show the same kernel using the common API and the CUTLASS-qualified API.
 
 The :doc:`overview <coop>` introduces ``cuda.coop`` and installation.
@@ -58,7 +59,7 @@ qualified imports perform that registration directly.
      - Common ``cuda.coop``
      - Qualified ``cuda.coop.cutlass``
    * - Payloads
-     - Fixed per-thread ``ThreadData``; Load fills it in place.
+     - Fixed per-thread ``ThreadData`` returned by Load or constructed directly.
      - Adds CuTe register-tensor and vector conversions, described in
        :ref:`coop-cutlass-register-payloads`.
    * - Operator selection
@@ -191,7 +192,7 @@ After registration, call the primitives inside ``@cute.kernel`` or a
 
 This example computes exclusive prefix sums across a block: each output is
 seven plus the sum of all preceding input values. For input
-``[0, 1, 2, 3, ...]``, it produces ``[7, 7, 8, 10, ...]``. Load fills the
+``[0, 1, 2, 3, ...]``, it produces ``[7, 7, 8, 10, ...]``. Load returns the
 per-thread payload, Scan returns a new payload, and Store writes the result.
 All three operations reuse one ``TempStorage`` with automatic synchronization.
 
@@ -230,14 +231,17 @@ layout tag. See the :doc:`Load <coop/visualizations/load>` and
 :doc:`Exchange <coop/visualizations/exchange>` visualizations for the mappings.
 
 Pass the item count as ``items_per_thread: cutlass.Constexpr`` on the
-``@cute.kernel`` and its ``@cute.jit`` launcher, and construct the payload
-with ``coop.ThreadData(items_per_thread)``. Forward the host value through
-the launcher to the kernel. CuTe specializes the count during compilation;
+``@cute.kernel`` and its ``@cute.jit`` launcher, then load values with
+``coop.load(group, source, items_per_thread=items_per_thread)``.
+Forward the host value through the launcher to the kernel. CuTe specializes
+the count during compilation;
 it remains fixed while the kernel executes. Use
 ``cutlass.range_constexpr(items_per_thread)`` when indexing each slot.
 
-Leave the constructor's element type unspecified for normal use. Load
-infers it from the memory operand; consuming primitives can infer it from
+Load infers the payload's element type from the memory operand. For generated
+values and writable auxiliary outputs, construct
+``coop.ThreadData(items_per_thread)`` directly. Leave its element type
+unspecified for normal use; consuming primitives can infer it from
 homogeneous initialized values. Use typed scalar assignments, such as
 ``cutlass.Int32(expression)``, when the computation needs a specific numeric
 representation. Supported payload types are signed and unsigned integers of
@@ -252,18 +256,27 @@ with ``cutlass.Int32(value)``. Integer sums can overflow, and a parallel
 floating-point sum can differ from a sequential CPU sum because the order
 of additions differs.
 
-Load initializes the destination payload in place and returns ``None``.
-Store also returns ``None``. Transpose Store algorithms may rearrange the
-input payload; copy values before Store if they are needed later. For payload
+Load returns a fresh payload when given ``items_per_thread``. To fill an
+existing payload, use ``coop.load(group, source, output)``; that form returns
+``None`` and preserves aliases to ``output``. Both typed and dtype-free
+constructors remain supported. Store returns ``None``. Transpose Store
+algorithms may rearrange the input payload; copy values before Store if they
+are needed later. For payload
 inputs, Scan, Exchange, sorting, selection, and array Shuffle return fresh
 payloads. Supported scalar forms return CuTe scalars. Reduce returns one
 scalar even when each thread contributes multiple items. Read results
 only at the positions or threads where the primitive defines them.
 
 Index payloads with compile-time integers and initialize each item before
-reading it. ``ThreadData(items_per_thread, alignment=16)`` requests at
-least 16-byte alignment when storage is materialized. Input and output memory
-alignment is separate. The compiler decides which values remain in registers
+reading it. ``coop.load(group, source, items_per_thread=N, alignment=16)``
+requests at least 16-byte alignment when the returned payload's storage is
+materialized. Its alignment follows ``ThreadData(N, alignment=16)``: a positive
+compile-time power of two, preserved across payload reconstruction and register
+exports. For an existing output, set the alignment on ``ThreadData`` and omit
+``alignment`` from Load (or pass ``None``). Load cannot change that output's
+storage policy. Input and output memory alignment is separate; the kwarg makes
+no promise about the source pointer, including a pointer with an element offset.
+The compiler decides which values remain in registers
 and which spill to local memory. The :ref:`qualified conversion methods
 <coop-cutlass-register-payloads>` connect payloads to CuTe register tensors
 and immutable register values.
@@ -348,8 +361,10 @@ alignment permit them, with direct accesses as a fallback.
 
 Direct, striped, and vectorized Load/Store use no shared scratch and need no
 scratch-reuse barrier, even when passed a ``TempStorage`` descriptor.
-``ThreadData(items_per_thread, alignment=...)`` requests a minimum payload
-alignment; it does not change the logical item layout.
+Returning Load's ``alignment=...`` and
+``ThreadData(items_per_thread, alignment=...)`` request a minimum payload
+alignment; neither changes the logical item layout or guarantees vectorized
+memory accesses.
 
 .. _coop-cutlass-storage:
 

@@ -31,8 +31,7 @@ def test_neighbors_example(items_per_thread):
         items_per_thread: cutlass.Constexpr,
     ):
         block = coop.this_block()
-        values = coop.ThreadData(items_per_thread)
-        coop.load(block, source, values)
+        values = coop.load(block, source, items_per_thread=items_per_thread)
         scratch = coop.TempStorage(auto_sync=True)
         differences = coop.adjacent_difference(
             block, values, tile_predecessor_item=0, temp_storage=scratch

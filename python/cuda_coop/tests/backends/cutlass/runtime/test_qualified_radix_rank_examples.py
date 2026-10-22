@@ -30,8 +30,7 @@ def test_radix_rank_example(items_per_thread):
         items_per_thread: cutlass.Constexpr,
     ):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         prefixes = coop.ThreadData(items_per_thread=1)
         ranks = coop.radix_rank_keys(
             block, keys, radix_bits=4, exclusive_digit_prefix=prefixes

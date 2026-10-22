@@ -58,14 +58,18 @@ signature and are passed positionally. Controls after ``*`` are keyword-only:
 
 .. code-block:: python
 
-   coop.load(group, source, items, valid_items=count, offset=offset)
+   items = coop.load(
+       group, source, items_per_thread=items_per_thread,
+       valid_items=count, offset=offset,
+   )
    result = coop.reduce(group, items, binary_op="max")
 
 These conventions apply to both backends. A qualified signature can add
 operands or controls; check the :doc:`API reference <../coop_api>` rather than
-passing a backend extension to the common namespace. Load fills its output
-in place and returns ``None``; an operation that returns a new value leaves
-its input payload unchanged unless its contract says otherwise.
+passing a backend extension to the common namespace. Load returns a payload
+when given ``items_per_thread``. Its output form fills an existing payload
+and returns ``None``. An operation that returns a new value leaves its input
+payload unchanged unless its contract says otherwise.
 
 .. _coop-backend-registration:
 
@@ -188,31 +192,52 @@ or a reuse barrier.
 Per-thread payloads
 ^^^^^^^^^^^^^^^^^^^
 
-``coop.ThreadData(items_per_thread)`` describes a fixed-size payload of
-``items_per_thread`` values owned by each thread. Pass that count as a kernel
+``coop.load(group, source, items_per_thread=items_per_thread)`` returns each
+participating thread's fixed-size ``ThreadData`` payload. Its element type
+comes from ``source``. Pass the positive compile-time count as a kernel
 argument: Numba-CUDA-MLIR specializes it automatically; CuTe kernels and their
-launchers declare it as ``items_per_thread: cutlass.Constexpr``. Leave the
-element type unspecified for normal use: Load infers it from its source, fills
-the payload in place, and returns ``None``. Other operations either consume
-that payload or return a new scalar or payload according to their contract. As
-in CUB, transpose Store algorithms may rearrange the input payload in place.
-Copy values before Store if they are needed later.
+launchers declare it as ``items_per_thread: cutlass.Constexpr``. A count of
+one still returns a payload.
+
+Use ``coop.ThreadData(items_per_thread)`` to construct a payload for computed
+values or an explicit output. The output form,
+``coop.load(group, source, output)``, fills that existing payload and returns
+``None``. Supply exactly one of ``output`` or ``items_per_thread``. Dtype-free
+``ThreadData`` construction remains supported, including Numba-CUDA-MLIR's
+backward inference from later uses such as Store. ``items_per_thread`` and
+``alignment`` are keyword-only. The third positional argument is always an
+output payload, so ``coop.load(group, source, 4)`` is invalid.
+A non-``None`` ``alignment`` is valid only with ``items_per_thread``; set an
+existing output's alignment when constructing it instead.
 
 Supported payload dtypes are signed and unsigned 8-, 16-, 32-, and 64-bit
 integers and 32- and 64-bit floating-point values. An explicit alignment is
 a positive power of two in bytes and sets a minimum when payload storage
 is materialized. It does not assert alignment of an input or output array.
+For example,
+``coop.load(group, source, items_per_thread=items_per_thread, alignment=16)``
+requests at least 16-byte alignment for the returned payload, as does
+``coop.ThreadData(items_per_thread, alignment=16)`` for a directly constructed
+payload. ``None`` lets the compiler choose; it may use stronger alignment.
 
 The payload extent is a compile-time value available as
-``items.items_per_thread``. Initialize every item an operation will read; Load
-without ``oob_default`` leaves invalid slots unspecified. Assign those slots
-after Load before reading them. Backend value rules still apply:
+``items.items_per_thread``. Directly constructed slots start uninitialized.
+Initialize every item an operation will read; either Load form without
+``oob_default`` leaves invalid slots unspecified. Assign those slots after
+Load before reading them, or supply a default. As in CUB, transpose Store
+algorithms may rearrange the input payload in place. Copy values before
+Store if they are needed later.
+
+:class:`cuda.coop.ThreadDataLike` names the shared payload interface in type
+signatures. Protocol compatibility alone does not make an arbitrary Python
+object a supported kernel value. Backend value rules still apply:
 Numba-qualified calls can accept supported local arrays, while
 CUTLASS-qualified ``ThreadData`` supports CuTe register-tensor conversions.
 Supported typed assignments and cooperative producers can establish the
 element type. The :ref:`element-type inference FAQ
 <coop-faq-thread-data-dtype>` covers cases that need explicit information. For
-backend details, see the :ref:`Numba type rules <coop-thread-data>` and
+backend details, including payload lifetimes in loops, see the
+:ref:`Numba type rules <coop-thread-data>` and
 :ref:`CUTLASS payload conversions <coop-cutlass-register-payloads>`.
 
 .. _coop-common-layouts:

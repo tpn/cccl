@@ -61,9 +61,8 @@ def run_example(api="common", items_per_thread=2):
         valid_items = tile_size - 35
         selected_items = min(_K, valid_items)
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
         positions = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         for item in cutlass.range_constexpr(items_per_thread):
             positions[item] = (
                 cutlass.Int32(block.rank()) * items_per_thread + item

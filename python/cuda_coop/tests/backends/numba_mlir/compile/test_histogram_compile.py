@@ -56,8 +56,7 @@ def test_histogram_links_with_independent_counter_type(
     @cuda.jit(chip="sm_90")
     def kernel(source, destination, items_per_thread):
         block = coop.this_block()
-        samples = coop.ThreadData(items_per_thread)
-        coop.load(block, source, samples)
+        samples = coop.load(block, source, items_per_thread=items_per_thread)
         counts = coop.histogram(
             block,
             samples,

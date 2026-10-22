@@ -105,8 +105,7 @@ def test_scan_example(items_per_thread):
         items_per_thread: cutlass.Constexpr,
     ):
         block = coop.this_block()
-        values = coop.ThreadData(items_per_thread)
-        coop.load(block, source, values)
+        values = coop.load(block, source, items_per_thread=items_per_thread)
         scratch = coop.TempStorage(auto_sync=True)
         seeded_sums = coop.scan(
             block, values, initial_value=7, temp_storage=scratch

@@ -47,10 +47,13 @@ def test_mixed_primitives(api, items_per_thread):
         group = api.this_block()
         thread = group.rank()
         outputs = cute.make_tensor(observed, cute.make_layout(2))
-        payload = api.ThreadData(items_per_thread)
         storage = api.TempStorage(sharing="shared", auto_sync=True)
-        api.load(
-            group, source, payload, algorithm="transpose", temp_storage=storage
+        payload = api.load(
+            group,
+            source,
+            items_per_thread=items_per_thread,
+            algorithm="transpose",
+            temp_storage=storage,
         )
         total = api.sum(group, payload, temp_storage=storage)
         prefix = api.sum(
@@ -112,11 +115,10 @@ def test_sort_scan_shared_storage(api, items_per_thread):
         group = api.this_block()
         storage = api.TempStorage(alignment=128, auto_sync=True)
         for tile in range(tiles):
-            keys = api.ThreadData(items_per_thread)
-            api.load(
+            keys = api.load(
                 group,
                 source,
-                keys,
+                items_per_thread=items_per_thread,
                 algorithm="transpose",
                 offset=tile * 64 * items_per_thread,
                 temp_storage=storage,

@@ -34,9 +34,10 @@ def test_scatter_example():
     @cuda.jit
     def reverse_tile(source, destination, items_per_thread):
         block = numba_coop.this_block()
-        items = numba_coop.ThreadData(items_per_thread)
         ranks = numba_coop.ThreadData(items_per_thread)
-        numba_coop.load(block, source, items)
+        items = numba_coop.load(
+            block, source, items_per_thread=items_per_thread
+        )
         for item in range(items_per_thread):
             index = cuda.threadIdx.x * items_per_thread + item
             ranks[item] = types.int32(

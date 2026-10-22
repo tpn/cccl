@@ -89,11 +89,10 @@ def test_mixed_loop(api, sharing, capacity, auto_sync, alignment):
             )
         group = api.this_block()
         for tile in range(tiles):
-            payload = api.ThreadData(items_per_thread)
-            api.load(
+            payload = api.load(
                 group,
                 source,
-                payload,
+                items_per_thread=items_per_thread,
                 algorithm="transpose",
                 offset=tile * _TILE,
                 temp_storage=storage,

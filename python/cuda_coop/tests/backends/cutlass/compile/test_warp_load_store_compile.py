@@ -77,11 +77,10 @@ def test_physical_warp_compile(api, algorithm, items_per_thread):
         destination: cute.Pointer,
         items_per_thread: cutlass.Constexpr,
     ):
-        payload = api.ThreadData(items_per_thread, dtype=cutlass.Int32)
-        api.load(
+        payload = api.load(
             api.this_warp(),
             source,
-            payload,
+            items_per_thread=items_per_thread,
             algorithm=algorithm,
             valid_items=32 * items_per_thread - 17,
             oob_default=-13,

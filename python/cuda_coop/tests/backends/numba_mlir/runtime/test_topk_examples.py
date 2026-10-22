@@ -40,9 +40,14 @@ def test_topk_pairs_example():
         source, count, selected_keys, original_positions, items_per_thread
     ):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
         positions = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys, valid_items=count, oob_default=0)
+        keys = coop.load(
+            block,
+            source,
+            items_per_thread=items_per_thread,
+            valid_items=count,
+            oob_default=0,
+        )
         for item in range(items_per_thread):
             positions[item] = types.int32(
                 cuda.threadIdx.x * items_per_thread + item
@@ -92,8 +97,13 @@ def test_topk_keys_example():
     @cuda.jit
     def select_extremes(source, count, smallest, largest, k, items_per_thread):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys, valid_items=count, oob_default=0)
+        keys = coop.load(
+            block,
+            source,
+            items_per_thread=items_per_thread,
+            valid_items=count,
+            oob_default=0,
+        )
         low = coop.topk_min_keys(block, keys, k=k, valid_items=count)
         high = coop.topk_max_keys(block, keys, k=k, valid_items=count)
         selected_count = min(k, count)
@@ -135,9 +145,14 @@ def test_topk_min_pairs_example():
         source, count, selected_keys, positions, items_per_thread
     ):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
         indices = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys, valid_items=count, oob_default=0)
+        keys = coop.load(
+            block,
+            source,
+            items_per_thread=items_per_thread,
+            valid_items=count,
+            oob_default=0,
+        )
         for item in range(items_per_thread):
             indices[item] = types.int32(
                 cuda.threadIdx.x * items_per_thread + item

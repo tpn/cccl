@@ -48,11 +48,10 @@ def run_example(*, sharing="shared", manual_sync=False, items_per_thread=4):
             sharing=sharing, alignment=1, auto_sync=not manual_sync
         )
         for tile in range(tiles):
-            payload = coop.ThreadData(items_per_thread)
-            coop.load(
+            payload = coop.load(
                 coop.this_block(),
                 source,
-                payload,
+                items_per_thread=items_per_thread,
                 algorithm="transpose",
                 offset=tile * tile_size,
                 temp_storage=storage,

@@ -392,3 +392,22 @@ def check_batched_reduction_typing() -> None:
     assert_type(
         coop.reduce_batched(warp, values), coop.ThreadDataLike[np.float32]
     )
+
+
+def check_returning_load(source: object, destination: object) -> None:
+    block = coop.this_block()
+    warp = coop.this_warp()
+    returned = coop.load(block, source, items_per_thread=4, alignment=64)
+    assert_type(returned, coop.ThreadDataLike[Any])
+    assert_type(
+        coop.load(warp, source, items_per_thread=1, alignment=None),
+        coop.ThreadDataLike[Any],
+    )
+    assert_type(
+        coop.load(
+            block, source, items_per_thread=4, valid_items=7, oob_default=0
+        ),
+        coop.ThreadDataLike[Any],
+    )
+    coop.store(block, destination, returned)
+    assert_type(coop.load(block, source, returned, alignment=None), None)

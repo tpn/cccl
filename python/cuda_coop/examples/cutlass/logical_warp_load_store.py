@@ -56,13 +56,12 @@ def run_example(api="common", items_per_thread=4):
         thread = x + _BLOCK[0] * (y + _BLOCK[1] * z)
         group_index = thread // _WIDTH
         group = coop.this_warp().group_by(_WIDTH)
-        payload = coop.ThreadData(items_per_thread)
         # The compiler assigns each eight-lane group its own consecutive tile.
         # valid_items counts elements in that group's tile.
-        coop.load(
+        payload = coop.load(
             group,
             source,
-            payload,
+            items_per_thread=items_per_thread,
             algorithm="transpose",
             valid_items=cutlass.Int32(group_tile - 1 - group_index),
             oob_default=-1,

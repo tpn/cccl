@@ -41,9 +41,10 @@ def test_scatter_example(items_per_thread):
     ):
         block = cutlass_coop.this_block()
         thread = block.rank()
-        items = cutlass_coop.ThreadData(items_per_thread)
+        items = cutlass_coop.load(
+            block, source, items_per_thread=items_per_thread
+        )
         ranks = cutlass_coop.ThreadData(items_per_thread)
-        cutlass_coop.load(block, source, items)
         for item in cutlass.range_constexpr(items_per_thread):
             ranks[item] = cutlass.Int32(
                 64 * items_per_thread - 1 - (thread * items_per_thread + item)

@@ -12,6 +12,7 @@ representations from silently widening the common API.
 
 from __future__ import annotations
 
+from numbers import Integral
 from typing import Any
 
 from cuda.coop._typing import (
@@ -35,6 +36,7 @@ from ._payload import (
     TempStorageLike,
     ThreadDataLike,
     _common_thread_data_extent,
+    _normalize_alignment,
     _ReadableThreadDataLike,
     _validate_common_integer_value,
     _validate_common_numeric_scalar,
@@ -71,6 +73,7 @@ def _validate_common_load_store_options(
     *,
     algorithm: Any,
     payload: Any,
+    items_per_thread: int | None = None,
     valid_items: Any,
     oob_default: object = None,
     offset: Any,
@@ -108,7 +111,7 @@ def _validate_common_load_store_options(
                     "and 2147483647"
                 )
             if group.static_size is not None:
-                items_per_thread = (
+                payload_items = items_per_thread or (
                     _common_thread_data_extent(
                         operation,
                         "output" if operation == "load" else "value",
@@ -117,7 +120,7 @@ def _validate_common_load_store_options(
                     if isinstance(payload, _ReadableThreadDataLike)
                     else 1
                 )
-                tile_items = group.static_size * items_per_thread
+                tile_items = group.static_size * payload_items
                 if static_valid_items > tile_items:
                     raise ValueError(
                         f"cuda.coop.{operation} valid_items "
@@ -160,16 +163,22 @@ def _validate_common_load_store_options(
 def load(
     group: BlockGroup | WarpGroup,
     source: object,
-    output: ThreadDataLike[_CommonNumericT],
+    output: ThreadDataLike[_CommonNumericT] | None = None,
     /,
     *,
+    items_per_thread: int | None = None,
+    alignment: int | None = None,
     algorithm: BlockLoadStoreAlgorithm | WarpLoadStoreAlgorithm = "direct",
     valid_items: ValidItems | None = None,
     oob_default: _CommonNumericT | float | None = None,
     offset: IntegerValue | None = None,
     temp_storage: TempStorageLike | None = None,
-) -> None:
-    """Load a group tile from memory into per-thread values.
+) -> ThreadDataLike[Any] | None:
+    """Load a group tile and return its per-thread values.
+
+    Prefer ``values = load(group, source, items_per_thread=N)`` for a fresh
+    payload. To populate an existing destination, pass ``output`` instead;
+    that form returns ``None``. Specify exactly one of these two forms.
 
     Parameters
     ----------
@@ -179,13 +188,29 @@ def load(
         an enclosing block size divisible by 32.
     source : array
         One-dimensional contiguous source array in device-accessible memory.
-        Its element dtype must match ``output``; an untyped ``ThreadData``
-        infers its dtype from this array. The array must contain all elements
+        Its element dtype determines the returned payload's dtype, or must
+        match an existing ``output``. An untyped output infers its dtype from
+        this array. The array must contain all elements
         selected by ``offset`` and ``valid_items``.
-    output : cuda.coop.ThreadDataLike
+    output : cuda.coop.ThreadDataLike, optional
         Writable :ref:`per-thread payload <coop-common-payloads>`.
         Load populates this payload in place. The group's tile contains
         ``group_size * items_per_thread`` elements.
+        Omit ``items_per_thread`` and leave ``alignment=None`` when supplying
+        this destination. Use this form when aliases must observe the update
+        or the destination needs a lifetime established before this call.
+    items_per_thread : int, optional
+        Positive compile-time number of values returned for each thread.
+        Required when ``output`` is omitted. Even a count of one returns a
+        payload with indexed reads and writes, rather than a scalar.
+    alignment : int, optional
+        Compile-time minimum alignment in bytes for the returned payload,
+        with the same positive power-of-two rules as :func:`ThreadData`.
+        ``None`` lets the compiler choose; it may strengthen an explicit
+        request. Requires the ``items_per_thread`` form. For an existing
+        ``output``, specify alignment when constructing that payload instead.
+        This does not assert alignment of ``source`` or change scratch
+        alignment, which is configured through ``temp_storage``.
     algorithm : str, optional
         Compile-time load algorithm, default ``"direct"``. ``"direct"`` gives
         each thread consecutive elements (blocked order); ``"striped"`` gives
@@ -220,8 +245,9 @@ def load(
 
     Returns
     -------
-    None
-        The call populates ``output`` in place.
+    cuda.coop.ThreadDataLike or None
+        A fresh payload when ``items_per_thread`` is supplied. Otherwise,
+        populate ``output`` in place and return ``None``.
 
     See Also
     --------
@@ -253,7 +279,25 @@ def load(
     algorithm = _common_selector(
         "load", "algorithm", algorithm, _COMMON_LOAD_STORE_ALGORITHMS
     )
-    if _backend_module_name() is not None:
+    if output is None:
+        if items_per_thread is None:
+            raise TypeError(
+                "cuda.coop.load requires output or items_per_thread"
+            )
+        if isinstance(items_per_thread, bool) or not isinstance(
+            items_per_thread, Integral
+        ):
+            raise TypeError(
+                "cuda.coop.load items_per_thread must be a compile-time integer"
+            )
+        if items_per_thread <= 0:
+            raise ValueError("cuda.coop.load items_per_thread must be positive")
+        alignment = _normalize_alignment(alignment)
+    elif items_per_thread is not None:
+        raise TypeError(
+            "cuda.coop.load accepts output or items_per_thread, not both"
+        )
+    if _backend_module_name() is not None and output is not None:
         _validate_common_numeric_value(
             "load",
             "output",
@@ -261,22 +305,30 @@ def load(
             allow_untyped_thread_data=True,
             require_thread_data=True,
         )
+    if output is not None and alignment is not None:
+        raise TypeError(
+            "cuda.coop.load alignment requires items_per_thread and no output; "
+            "set alignment when constructing the output instead"
+        )
     _validate_common_load_store_options(
         "load",
         group,
         algorithm=algorithm,
         payload=output,
+        items_per_thread=items_per_thread,
         valid_items=valid_items,
         oob_default=oob_default,
         offset=offset,
         temp_storage=temp_storage,
     )
 
-    _group_primitive_marker(
+    return _group_primitive_marker(
         "load",
         group,
         source,
         output,
+        items_per_thread=items_per_thread,
+        alignment=alignment,
         algorithm=algorithm,
         valid_items=valid_items,
         oob_default=oob_default,

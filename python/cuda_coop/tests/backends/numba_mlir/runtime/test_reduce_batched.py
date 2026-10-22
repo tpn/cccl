@@ -65,8 +65,7 @@ def test_batch_reduction_layouts_preserve_input(width, batches, layout, dtype):
     def kernel(source, output, preserved, items_per_thread):
         block = coop.this_block()
         warp = coop.this_warp().group_by(width)
-        values = coop.ThreadData(items_per_thread)
-        coop.load(block, source, values)
+        values = coop.load(block, source, items_per_thread=items_per_thread)
         result = coop.reduce_batched(warp, values, output_layout=layout)
         thread = cuda.threadIdx.x
         lane = thread % width
@@ -108,8 +107,9 @@ def test_batch_reduction_layouts_preserve_input(width, batches, layout, dtype):
 def test_batch_builtin_operators(operator, items_per_thread):
     @cuda.jit
     def kernel(source, output, items_per_thread):
-        values = coop.ThreadData(items_per_thread)
-        coop.load(coop.this_block(), source, values)
+        values = coop.load(
+            coop.this_block(), source, items_per_thread=items_per_thread
+        )
         result = coop.reduce_batched(
             coop.this_warp(), values, binary_op=operator
         )
@@ -143,8 +143,9 @@ def test_custom_operator_and_chained_result_extent():
 
     @cuda.jit
     def kernel(source, output, items_per_thread):
-        values = coop.ThreadData(items_per_thread)
-        coop.load(coop.this_block(), source, values)
+        values = coop.load(
+            coop.this_block(), source, items_per_thread=items_per_thread
+        )
         result = numba_coop.reduce_batched(
             coop.this_warp(), values, binary_op=maximum, output_layout="blocked"
         )
@@ -173,8 +174,9 @@ def test_only_one_logical_warp_participates(items_per_thread):
 
     @cuda.jit
     def kernel(source, output, items_per_thread):
-        values = coop.ThreadData(items_per_thread)
-        coop.load(coop.this_block(), source, values)
+        values = coop.load(
+            coop.this_block(), source, items_per_thread=items_per_thread
+        )
         if cuda.threadIdx.x < 8:
             result = coop.reduce_batched(coop.this_warp().group_by(8), values)
             if cuda.threadIdx.x < items_per_thread:
@@ -201,8 +203,7 @@ def test_warp_feature_sums_example():
     @cuda.jit
     def feature_sums(samples, totals, items_per_thread):
         warp = coop.this_warp()
-        features = coop.ThreadData(items_per_thread)
-        coop.load(warp, samples, features)
+        features = coop.load(warp, samples, items_per_thread=items_per_thread)
         sums = coop.reduce_batched(warp, features)
         # Lane 0 owns feature 0's sum, lane 1 feature 1's, and so on.
         if warp.rank() < items_per_thread:

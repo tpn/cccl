@@ -77,8 +77,7 @@ def test_reduce_batched_links_native_provider(
     @cuda.jit(chip="sm_90")
     def kernel(source, destination, items_per_thread):
         block = coop.this_block()
-        values = coop.ThreadData(items_per_thread)
-        coop.load(block, source, values)
+        values = coop.load(block, source, items_per_thread=items_per_thread)
         result = coop.reduce_batched(
             coop.this_warp(), values, output_layout=layout
         )
@@ -103,8 +102,7 @@ def test_reduce_batched_rejects_invalid_contract(
 ):
     @cuda.jit(chip="sm_90")
     def kernel(source, destination):
-        values = coop.ThreadData(items_per_thread=3)
-        coop.load(coop.this_block(), source, values)
+        values = coop.load(coop.this_block(), source, items_per_thread=3)
         if kind == "block":
             group = coop.this_block()
         else:
@@ -119,8 +117,7 @@ def test_reduce_batched_rejects_invalid_contract(
 def test_reduce_batched_rejects_partial_physical_warp(compile_kernel):
     @cuda.jit(chip="sm_90")
     def kernel(source, destination):
-        values = coop.ThreadData(items_per_thread=3)
-        coop.load(coop.this_block(), source, values)
+        values = coop.load(coop.this_block(), source, items_per_thread=3)
         result = coop.reduce_batched(coop.this_warp(), values)
         destination[cuda.threadIdx.x] = result[0]
 

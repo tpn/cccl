@@ -220,11 +220,10 @@ def test_load_topk_sort_store_loop(api):
         scratch = api.TempStorage(alignment=128, auto_sync=True)
         group = api.this_block()
         for index in range(repeats):
-            data = api.ThreadData(items_per_thread, dtype=cutlass.Int32)
-            api.load(
+            data = api.load(
                 group,
                 source,
-                data,
+                items_per_thread=items_per_thread,
                 offset=index * tile,
                 algorithm="transpose",
                 temp_storage=scratch,

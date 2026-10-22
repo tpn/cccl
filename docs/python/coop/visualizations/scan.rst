@@ -93,9 +93,10 @@ own tile independently.
 .. code-block:: python
 
    block = coop.this_block()
-   values = coop.ThreadData(items_per_thread)
    offset = block_index * 128 * items_per_thread
-   coop.load(block, source, values, offset=offset)
+   values = coop.load(
+       block, source, items_per_thread=items_per_thread, offset=offset
+   )
    prefixes = coop.inclusive_sum(block, values, algorithm="raking_memoize")
    coop.store(block, output, prefixes, offset=offset)
 

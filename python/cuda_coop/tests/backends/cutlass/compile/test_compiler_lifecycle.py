@@ -51,8 +51,9 @@ def _copy_launcher(api, *, nested=False):
         destination: cute.Pointer,
         items_per_thread: cutlass.Constexpr,
     ):
-        payload = api.ThreadData(items_per_thread)
-        api.load(api.this_block(), source, payload)
+        payload = api.load(
+            api.this_block(), source, items_per_thread=items_per_thread
+        )
         api.store(api.this_block(), destination, payload)
 
     @cute.kernel
@@ -64,8 +65,9 @@ def _copy_launcher(api, *, nested=False):
         if cutlass.const_expr(nested):
             copy_tile(source, destination, items_per_thread)
         else:
-            payload = api.ThreadData(items_per_thread)
-            api.load(api.this_block(), source, payload)
+            payload = api.load(
+                api.this_block(), source, items_per_thread=items_per_thread
+            )
             api.store(api.this_block(), destination, payload)
 
     @cute.jit
@@ -242,8 +244,9 @@ def test_failed_trace_after_registering_a_provider_can_retry(items_per_thread):
         reject: cutlass.Constexpr,
         items_per_thread: cutlass.Constexpr,
     ):
-        payload = coop.ThreadData(items_per_thread)
-        coop.load(coop.this_block(), source, payload)
+        payload = coop.load(
+            coop.this_block(), source, items_per_thread=items_per_thread
+        )
         if cutlass.const_expr(reject):
             raise ValueError("injected failure after provider registration")
         coop.store(coop.this_block(), destination, payload)
