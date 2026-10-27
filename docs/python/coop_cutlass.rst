@@ -326,6 +326,8 @@ and ``oob_default`` retain their ordinary Load meaning. Without a default,
 items beyond the valid prefix are unspecified and must not be read.
 
 The shared output must not overlap the source range or primitive scratch.
+A detected output/scratch overlap triggers a device trap and leaves the CUDA
+context unusable.
 For a reserved output and explicit scratch in one workspace, use
 ``TempStorage(sharing="exclusive")``. Separate descriptors also provide
 disjoint storage. A shared descriptor's overlapping reservations cannot

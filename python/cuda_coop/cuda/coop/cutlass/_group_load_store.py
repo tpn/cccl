@@ -179,6 +179,8 @@ def load(
     covers only its own lanes.
 
     Shared output must not overlap the source range or primitive scratch.
+    A detected output/scratch overlap triggers a device trap and leaves the
+    CUDA context unusable.
     Separate descriptors or ``TempStorage(sharing="exclusive")`` keep
     reservations and explicit scratch in disjoint storage. DIRECT and
     TRANSPOSE produce blocked rows, giving a flat copy of each source tile.
