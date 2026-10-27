@@ -345,6 +345,16 @@ launching, and synchronization. Reservations still follow their scratch
 aliasing and lifetime rules. A reservation supplies memory, not a transfer
 operation or completion guarantee.
 
+Is Load an asynchronous global-to-shared copy?
+----------------------------------------------
+
+Neither Load form exposes an asynchronous transfer or a completion token.
+Transpose algorithms may use shared scratch to rearrange values, but their
+result is still per-thread values. This differs from copying a whole buffer
+into shared memory and waiting for that transfer to complete. See CCCL's
+:doc:`Tensor Memory Accelerator guide <../../cccl/tma>` for the C++
+asynchronous-copy facilities and their synchronization contracts.
+
 .. _coop-faq-thread-data-dtype:
 
 When does ``ThreadData`` need an explicit element type?
