@@ -291,7 +291,8 @@ Keep live source, output and primitive scratch regions disjoint; use separate
 descriptors or `sharing="exclusive"` for simultaneously live reservations and
 scratch.
 See the executable
-[shared-memory examples](tests/backends/numba_mlir/runtime/test_shared_load_store_example.py).
+[direct shared-destination example](tests/backends/numba_mlir/runtime/test_shared_load_output.py)
+and [Load/Store staging example](tests/backends/numba_mlir/runtime/test_shared_load_store_example.py).
 
 Direct `ThreadData(items_per_thread)` construction remains available for
 computed values, explicit alignment, and caller-owned outputs. Its element
