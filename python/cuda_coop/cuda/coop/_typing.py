@@ -45,6 +45,77 @@ WarpLoadStoreAlgorithm: TypeAlias = Literal[
     "transpose",
 ]
 
+ReduceAlgorithm: TypeAlias = Literal[
+    "raking_commutative_only",
+    "raking",
+    "warp_reductions",
+]
+
+ScanAlgorithm: TypeAlias = Literal["raking", "raking_memoize", "warp_scans"]
+
+ReduceOperator: TypeAlias = Literal[
+    "+",
+    "sum",
+    "add",
+    "plus",
+    "*",
+    "mul",
+    "multiply",
+    "multiplies",
+    "min",
+    "minimum",
+    "max",
+    "maximum",
+    "&",
+    "bit_and",
+    "|",
+    "bit_or",
+    "^",
+    "bit_xor",
+]
+
+SumScanOperator: TypeAlias = Literal["+", "sum", "add", "plus"]
+
+NonSumScanOperator: TypeAlias = Literal[
+    "*",
+    "mul",
+    "multiply",
+    "multiplies",
+    "min",
+    "minimum",
+    "max",
+    "maximum",
+    "&",
+    "bit_and",
+    "|",
+    "bit_or",
+    "^",
+    "bit_xor",
+]
+
+ScanOperator: TypeAlias = SumScanOperator | NonSumScanOperator
+
+ExchangeMode: TypeAlias = Literal[
+    "striped_to_blocked",
+    "blocked_to_striped",
+]
+
+BlockExchangeMode: TypeAlias = (
+    ExchangeMode
+    | Literal[
+        "warp_striped_to_blocked",
+        "blocked_to_warp_striped",
+        "scatter_to_blocked",
+        "scatter_to_striped",
+        "scatter_to_striped_guarded",
+        "scatter_to_striped_flagged",
+    ]
+)
+
+CommonShuffleMode: TypeAlias = Literal["down", "up"]
+
+ScalarShuffleMode: TypeAlias = Literal["offset", "rotate"]
+
 
 class CompilerScalarLike(Protocol):
     """Describe a compiler scalar without importing its concrete type."""
@@ -68,6 +139,8 @@ class CompilerIntegerLike(CompilerScalarLike, Protocol):
 if not TYPE_CHECKING and numpy is None:
     CommonNumericScalar: TypeAlias = int | float | CompilerScalarLike
     IntegerValue: TypeAlias = int | CompilerIntegerLike
+    SignedIntegerScalar: TypeAlias = int | CompilerIntegerLike
+    IntegralScalar: TypeAlias = SignedIntegerScalar
 else:
     CommonNumericScalar: TypeAlias = (
         int
@@ -89,6 +162,12 @@ else:
         IntegerValue: TypeAlias = int | numpy.integer[Any] | CompilerIntegerLike
     else:
         IntegerValue: TypeAlias = int | numpy.integer | CompilerIntegerLike
+
+    SignedIntegerScalar: TypeAlias = (
+        int | numpy.signedinteger[Any] | CompilerIntegerLike
+    )
+
+    IntegralScalar: TypeAlias = SignedIntegerScalar | numpy.unsignedinteger[Any]
 
 ValidItems: TypeAlias = IntegerValue
 

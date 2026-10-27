@@ -74,6 +74,8 @@ from ._scalar_provenance import (
 if TYPE_CHECKING:
     from .._types import Algorithm
     from ._rewrite import CoopSinglePhaseRewrite
+    from ._rewrite_release import _TempStorageRelease
+    from ._rewrite_reserve import _TempStorageReservation
 
 
 class _ProvenanceRewrite(Rewrite):
@@ -107,8 +109,14 @@ class _ProvenanceRewrite(Rewrite):
         self._rewrite_started = False
         self._factory_argument_cleanup_candidates: set[ir.Assign] = set()
         self._payload_callee_cleanup_names: set[str] = set()
+        self._temp_storage_reservations: dict[
+            ir.Assign, _TempStorageReservation
+        ] = {}
+        self._temp_storage_reserve_methods: set[ir.Assign] = set()
         self._temp_storage_assigns: set[ir.Assign] = set()
         self._temp_storage_func_vars: set[str] = set()
+        self._temp_storage_releases: dict[ir.Assign, _TempStorageRelease] = {}
+        self._temp_storage_release_methods: set[ir.Assign] = set()
         self._temp_storage_ctor_specifications: dict[
             str, _TempStorageCtorSpecification
         ] = {}
@@ -116,6 +124,7 @@ class _ProvenanceRewrite(Rewrite):
         self._temp_storage_ctor_roots: dict[str, str] = {}
         self._temp_storage_ctor_sites: dict[str, set[int]] = {}
         self._thread_data_func_vars: set[str] = set()
+        self._typed_group_payload_func_vars: set[str] = set()
         self._thread_data_specifications: dict[
             str, _ThreadDataSpecification
         ] = {}
@@ -511,6 +520,152 @@ class _ProvenanceRewrite(Rewrite):
             return True
         return self._resolve_python_value(call.func) is ThreadData
 
+    def _is_typed_group_payload_ctor_call(self, call: ir.Expr) -> bool:
+        """Recognize the planner's exact result-marker callable.
+
+        Resolve aliases to the callable object and reject attribute chains.
+        Matching by identity prevents an unrelated similarly named function
+        from being treated as a compiler-generated allocation marker.
+        """
+
+        chain = self._resolve_attribute_chain(call.func)
+        if chain is None:
+            return False
+        root, attrs = chain
+        if attrs:
+            return False
+        from ._group_planner_support import _typed_group_payload_like
+
+        return root is _typed_group_payload_like
+
+    def _is_typed_group_payload_var(self, value: ir.Var) -> bool:
+        """Look for a result-marker call among reaching definitions.
+
+        This probe distinguishes generated payloads that need complete extent
+        facts from ordinary candidates during provider inference. General
+        alias and shape traversal is handled by the specification resolvers.
+        """
+
+        return any(
+            isinstance(definition, ir.Expr)
+            and definition.op == "call"
+            and self._is_typed_group_payload_ctor_call(definition)
+            for definition in self._lookup_definitions(value)
+        )
+
+    def _extract_typed_group_payload_specification(
+        self, call: ir.Expr, *, seen: set[str] | None = None
+    ) -> _ThreadDataSpecification:
+        """Recover result dtype and extent from a planner-created marker.
+
+        Provider rewriting calls this when it encounters a result marker
+        instead of a real allocation. Here, extent means the number of array
+        elements owned by one thread; those elements need a concrete dtype
+        and count before local-array allocation can be emitted.
+
+        Validate the marker's positional arguments and constant shape/type
+        policy. The ``like`` policy inherits dtype from the prototype's array
+        facts or scalar type; ``int32`` fixes the dtype for rank and flag
+        results. An explicit positive extent takes precedence. Otherwise use
+        the prototype's array extent when the marker's array flag is true, or
+        one item when it is false. Retain any common API provenance supplied
+        by the prototype.
+
+        Return a possibly partial ``_ThreadDataSpecification``. Missing
+        inferred facts can be resolved by later provider inference, but
+        malformed marker arguments or an unknown policy raise
+        ``CoopSinglePhaseRewriteError``. The supplied ``seen`` path guards
+        recursive prototype traversal.
+
+        Parameters
+        ----------
+        call : ir.Expr
+            Call to ``_typed_group_payload_like`` emitted by group
+            planning, after its marker identity has been recognized.
+        seen : set of str or None, optional
+            Variable names already visited while following the
+            prototype. ``None`` starts a fresh traversal; independent
+            recursive branches receive copies.
+        """
+
+        if seen is None:
+            seen = set()
+        if len(call.args) not in {3, 4} or call.kws:
+            raise CoopSinglePhaseRewriteError(
+                "typed group payload marker requires prototype, array-kind, "
+                "dtype-policy, and optional explicit-extent arguments"
+            )
+        prototype, is_array_ref, dtype_policy_ref = call.args[:3]
+        if not isinstance(prototype, ir.Var):
+            raise CoopSinglePhaseRewriteError(
+                "typed group payload prototype must be a variable"
+            )
+        try:
+            is_array = self._infer_constant(is_array_ref)
+            dtype_policy = self._infer_constant(dtype_policy_ref)
+        except _INFERENCE_EXCEPTIONS as exc:
+            raise CoopSinglePhaseRewriteError(
+                "typed group payload shape and dtype policy must be "
+                "compile-time constants"
+            ) from exc
+        if not isinstance(is_array, bool):
+            raise CoopSinglePhaseRewriteError(
+                "typed group payload array-kind must be a compile-time bool"
+            )
+        from ._group_planner_support import (
+            _PAYLOAD_DTYPE_INT32,
+            _PAYLOAD_DTYPE_LIKE,
+        )
+
+        if dtype_policy not in {_PAYLOAD_DTYPE_LIKE, _PAYLOAD_DTYPE_INT32}:
+            raise CoopSinglePhaseRewriteError(
+                f"unknown typed group payload dtype policy {dtype_policy!r}"
+            )
+        prototype_specification = self._resolve_array_specification_from_var(
+            prototype, seen=set(seen)
+        )
+        if len(call.args) == 4:
+            try:
+                items_per_thread = self._infer_constant(call.args[3])
+            except _INFERENCE_EXCEPTIONS as exc:
+                raise CoopSinglePhaseRewriteError(
+                    "typed group payload explicit extent must be a "
+                    "compile-time positive integer"
+                ) from exc
+            if (
+                isinstance(items_per_thread, bool)
+                or not isinstance(items_per_thread, int)
+                or items_per_thread < 1
+            ):
+                raise CoopSinglePhaseRewriteError(
+                    "typed group payload explicit extent must be a "
+                    "compile-time positive integer"
+                )
+        elif is_array:
+            items_per_thread = (
+                prototype_specification.items_per_thread
+                if prototype_specification is not None
+                else None
+            )
+        else:
+            items_per_thread = 1
+        dtype = (
+            prototype_specification.dtype
+            if prototype_specification is not None
+            else None
+        )
+        if dtype is None:
+            dtype = self._resolve_var_dtype(prototype)
+        if dtype_policy == _PAYLOAD_DTYPE_INT32:
+            dtype = numba_types.int32
+        return _ThreadDataSpecification(
+            items_per_thread=items_per_thread,
+            dtype=dtype,
+            common_root=prototype_specification.common_root
+            if prototype_specification is not None
+            else False,
+        )
+
     def _extract_thread_data_specification(
         self, call: ir.Expr
     ) -> _ThreadDataSpecification:
@@ -751,7 +906,7 @@ class _ProvenanceRewrite(Rewrite):
             != self._temp_storage_contract(specification)
         ):
             raise CoopSinglePhaseRewriteError(
-                f"TempStorage aliases have inconsistent contracts across "
+                "TempStorage aliases have inconsistent contracts across "
                 f"constructor instances ({name})."
             )
         self._temp_storage_ctor_specifications.setdefault(name, specification)
@@ -762,11 +917,11 @@ class _ProvenanceRewrite(Rewrite):
         names: str, sites: int
     ) -> CoopSinglePhaseRewriteError:
         return CoopSinglePhaseRewriteError(
-            f"TempStorage with auto_sync=False must be constructed at "
+            "TempStorage with auto_sync=False must be constructed at "
             f"exactly one site; {names} reaches {sites} constructor sites. "
-            f"The compiler cannot verify caller synchronization when it "
-            f"merges these regions. Construct the descriptor once or set "
-            f"auto_sync=True."
+            "The compiler cannot verify caller synchronization when it "
+            "merges these regions. Construct the descriptor once or set "
+            "auto_sync=True."
         )
 
     def _validate_temp_storage_ctor_sites(self) -> None:
@@ -881,10 +1036,10 @@ class _ProvenanceRewrite(Rewrite):
         name: str,
     ) -> CoopSinglePhaseRewriteError:
         return CoopSinglePhaseRewriteError(
-            f"TempStorage variables must be bound to a TempStorage "
+            "TempStorage variables must be bound to a TempStorage "
             f"descriptor on every path; {name!r} is also bound to a "
-            f"non-descriptor value such as None. Remove the None initializer "
-            f"or construct the descriptor unconditionally."
+            "non-descriptor value such as None. Remove the None initializer "
+            "or construct the descriptor unconditionally."
         )
 
     def _collect_temp_storage_ctor_keys(
@@ -1057,7 +1212,7 @@ class _ProvenanceRewrite(Rewrite):
             )
             names = ", ".join(ordered_keys)
             raise CoopSinglePhaseRewriteError(
-                f"TempStorage aliases have inconsistent contracts across "
+                "TempStorage aliases have inconsistent contracts across "
                 f"constructor instances ({names})."
             )
         if len(roots) > 1 and not next(iter(contracts))[2]:
@@ -1127,8 +1282,8 @@ class _ProvenanceRewrite(Rewrite):
     ) -> tuple[object, ...]:
         """Identify storage uses that may reuse one region.
 
-        Legacy block providers share one domain. Caller-owned storage also
-        uses one domain, preserving its explicit reuse contract; its
+        Legacy block providers and caller-owned storage use one domain,
+        preserving the explicit reuse contract with typed reservations; its
         block-only restriction is checked by storage-plan validation.
         Implementation-owned storage instead partitions uses by group topology
         and reuse-barrier scope so incompatible group instances cannot alias.
@@ -1154,9 +1309,14 @@ class _ProvenanceRewrite(Rewrite):
             its storage instances disagree with its topology.
         """
 
+        if entry.reservation:
+            return ("caller-storage",)
         lowering_plan = entry.lowering_plan
         if lowering_plan is None:
-            return ("legacy-provider",)
+            # Explicit descriptors and implicit scratch are laid out
+            # separately. A legacy block provider using a descriptor shares
+            # its region with that descriptor's other callers.
+            return ("caller-storage",)
         if lowering_plan.unsupported is not None:
             raise CoopSinglePhaseRewriteError(
                 "cooperative provider storage received an unsupported group "
@@ -1212,7 +1372,8 @@ class _ProvenanceRewrite(Rewrite):
         """Lay out scratch for each call and group instance.
 
         Exclusive sharing gives each use a distinct domain. Shared placement
-        reuses a domain only when ``_temp_storage_domain_key`` permits it.
+        reuses a domain only when ``_temp_storage_domain_key`` permits it;
+        typed reservations join the descriptor's caller-owned scratch domain.
         Within a domain, reserve the largest per-instance requirement and
         align its stride for every consumer. Multiple group instances receive
         separate strides; compatible calls reuse those same instance slots.
@@ -1241,15 +1402,17 @@ class _ProvenanceRewrite(Rewrite):
             plan keyed by the object identity of each call assignment.
         """
 
-        ordered_uses = sorted(uses, key=lambda entry: entry.order)
+        ordered_uses = sorted(
+            uses, key=lambda entry: (entry.reservation, entry.order)
+        )
         required_alignment = max(
             _MIN_TEMP_STORAGE_ALIGNMENT,
             *(max(1, int(entry.alignment)) for entry in ordered_uses),
         )
         domains: dict[tuple[object, ...], list[_TempStorageUseRequirement]] = {}
-        for entry in ordered_uses:
+        for index, entry in enumerate(ordered_uses):
             domain_key = (
-                ("exclusive", entry.order)
+                ("exclusive", index)
                 if sharing == "exclusive"
                 else self._temp_storage_domain_key(entry)
             )
@@ -1270,9 +1433,9 @@ class _ProvenanceRewrite(Rewrite):
             # 32-thread warps in a 128-thread block need four separate slots.
             # Calls in a reuse domain agree on that count, so the first plan
             # is sufficient; an exclusive domain contains only one call.
-            # Legacy block providers have no topology and need one slot. The
-            # aligned instance_stride spaces groups' slots apart, while
-            # compatible calls reuse the same set of slots.
+            # Legacy block providers and typed reservations have no topology
+            # and need one slot. The aligned instance_stride spaces groups'
+            # slots apart, while compatible calls reuse the same set of slots.
             first_plan = domain_uses[0].lowering_plan
             instances = (
                 1
@@ -1302,10 +1465,11 @@ class _ProvenanceRewrite(Rewrite):
         """Finalize the storage layout for one ``TempStorage`` variable.
 
         Requirement collection has already recorded the constructor options
-        and the bytes needed by each primitive using this variable. Turn
-        those requirements into a plan for its shared memory: the total size,
-        alignment, and slice assigned to each call. The constructor's
-        ``sharing`` setting controls which calls may reuse the same bytes.
+        and the bytes needed by each primitive or ``reserve()`` call using
+        this variable. Turn those requirements into a plan for its shared
+        memory: the total size, alignment, and slice assigned to each call.
+        The constructor's ``sharing`` setting controls which calls may reuse
+        the same bytes.
 
         Infer an omitted ``size_in_bytes`` from the layout, or check that an
         explicit size is large enough. Choose an alignment that satisfies the
@@ -1340,8 +1504,8 @@ class _ProvenanceRewrite(Rewrite):
         Notes
         -----
         Whole-function validation separately rejects constructors with no
-        primitive consumer. An explicit size alone does not make an unused
-        descriptor valid.
+        primitive or ``reserve()`` consumer. An explicit size alone does not
+        make an unused descriptor valid.
         """
 
         var_name = self._canonical_temp_storage_ctor_key(var_name)
@@ -1353,7 +1517,7 @@ class _ProvenanceRewrite(Rewrite):
         )
         if ctor_specification is None:
             raise CoopSinglePhaseRewriteError(
-                f"Missing TempStorage constructor metadata for "
+                "Missing TempStorage constructor metadata for "
                 f"variable '{var_name}'."
             )
         requirements = self._func_temp_storage_requirements.get(var_name)
@@ -1390,8 +1554,9 @@ class _ProvenanceRewrite(Rewrite):
             )
         if required_size > 0 and size_in_bytes < required_size:
             raise CoopSinglePhaseRewriteError(
-                f"TempStorage size_in_bytes is smaller than required by "
-                f"primitive uses ({size_in_bytes} < {required_size})."
+                "TempStorage size_in_bytes is smaller than required by "
+                "primitive and reserve uses "
+                f"({size_in_bytes} < {required_size})."
             )
         if ctor_specification.alignment is None:
             alignment = _default_temp_storage_alignment(required_alignment)
@@ -1409,7 +1574,15 @@ class _ProvenanceRewrite(Rewrite):
             if ctor_specification.auto_sync is None
             else ctor_specification.auto_sync
         )
-        if not uses and (ctor_specification.sharing != "shared" or auto_sync):
+        released = any(
+            self._canonical_temp_storage_ctor_key(release.ctor_key) == var_name
+            for release in getattr(self, "_temp_storage_releases", {}).values()
+        )
+        if (
+            not uses
+            and not released
+            and (ctor_specification.sharing != "shared" or auto_sync)
+        ):
             raise CoopSinglePhaseRewriteError(
                 "TempStorage non-default sharing or auto_sync requires a "
                 "cooperative primitive to consume the storage descriptor."
@@ -1491,11 +1664,17 @@ class _ProvenanceRewrite(Rewrite):
     def _resolve_array_specification_from_var(
         self, value: ir.Var, seen: set[str]
     ) -> _ThreadDataSpecification | None:
-        """Merge array facts across constructors, aliases, and branches.
+        """Merge array facts from constructors and generated result markers.
 
-        Recognize public payloads and native local or shared arrays. ``seen``
-        stops recursive paths; unknown paths contribute no facts. The result
-        is partial inference, not proof that every path supplies an array.
+        Follow aliases, casts, static tuple items, and phi inputs to
+        ThreadData, local/shared arrays, or result markers. A marker inherits
+        its prototype's dtype unless its policy fixes int32; its extent can
+        be explicit. Unknown or cyclic paths contribute no facts. Conflicting
+        payload facts raise ``CoopSinglePhaseRewriteError``.
+
+        Extend ``seen`` in place and copy it for independent branches. Return
+        merged facts or ``None``; this is partial shape/type inference, not
+        proof that every origin is a public ThreadData payload.
         """
 
         if not isinstance(value, ir.Var):
@@ -1511,6 +1690,12 @@ class _ProvenanceRewrite(Rewrite):
                     if self._is_thread_data_ctor_call(definition):
                         candidate = self._extract_thread_data_specification(
                             definition
+                        )
+                    elif self._is_typed_group_payload_ctor_call(definition):
+                        candidate = (
+                            self._extract_typed_group_payload_specification(
+                                definition, seen=seen
+                            )
                         )
                     elif self._is_local_array_ctor_call(definition):
                         candidate = self._extract_local_array_specification(
@@ -1572,11 +1757,14 @@ class _ProvenanceRewrite(Rewrite):
         """Infer payload shape and dtype through variable origins.
 
         Follow aliases, casts, static tuple selections, and phi inputs to
-        ``ThreadData`` or local-array constructors. Reuse complete cached
-        specifications; otherwise merge discovered facts with any partial
-        cached information and cache the result. Conflicting known extents or
-        dtypes are errors, while alignment constraints merge by taking the
-        larger minimum.
+        ``ThreadData``, local-array constructors, or planner-created payload
+        markers. A marker takes its dtype from the prototype unless
+        its policy fixes int32. Its extent is explicit, or the prototype's
+        extent for an array marker, or one item for a scalar marker. Reuse
+        complete cached specifications; otherwise merge discovered facts with
+        partial cached information and cache the result. Conflicting known
+        extents or dtypes are errors, while alignment constraints merge by
+        taking the larger minimum.
 
         Unrecognized or cyclic paths contribute no facts. A returned
         specification is therefore partial inference, not proof that every
@@ -1625,6 +1813,12 @@ class _ProvenanceRewrite(Rewrite):
                     if self._is_thread_data_ctor_call(definition):
                         candidate = self._extract_thread_data_specification(
                             definition
+                        )
+                    elif self._is_typed_group_payload_ctor_call(definition):
+                        candidate = (
+                            self._extract_typed_group_payload_specification(
+                                definition, seen=seen
+                            )
                         )
                     elif self._is_local_array_ctor_call(definition):
                         candidate = self._extract_local_array_specification(
@@ -1772,31 +1966,31 @@ class _ProvenanceRewrite(Rewrite):
     def _is_thread_data_like_var(
         self, value: ir.Var, seen: set[str] | None = None
     ) -> bool:
-        """Check that known origins identify a public ``ThreadData`` payload.
+        """Check origins of public or planner-created payloads.
 
         Unlike shape inference, this check rejects an incoming non-payload
         origin, including a native local array, even when another branch is
-        ``ThreadData``. Trace aliases, casts, iterator exhaustion, tuple
-        items, and phi inputs; cycle-only paths remain unknown rather than
-        proving or disproving origin. At least one positive origin and no
-        negative origin are needed to cache a positive result. This prevents
-        rewriting ``items_per_thread`` on a mixed or unrelated object just
-        because some shape information is available.
+        ``ThreadData`` or a generated result payload. Trace aliases, casts,
+        iterator exhaustion, tuple items, and phi inputs. Cycle-only paths
+        remain unknown. A positive origin and no negative origin are needed
+        to cache a positive result. This prevents rewriting
+        ``items_per_thread`` on a mixed or unrelated object merely because
+        some shape information is available.
 
         Parameters
         ----------
         value : ir.Var
             Candidate receiver of the public payload attribute.
         seen : set of str or None, optional
-            Initial traversal guard. A copy is used, leaving the supplied
-            set intact.
+            Initial traversal guard. Copy it before traversal so the supplied
+            set remains unchanged.
 
         Returns
         -------
         bool
-            Whether public payload provenance is established. Positive
-            results are cached in ``_thread_data_like_vars``; unknown
-            results return False.
+            Whether public payload provenance is established. Cache
+            positive results in ``_thread_data_like_vars``. Return ``False``
+            when provenance is unknown.
         """
 
         def resolve(candidate: ir.Var, active: set[str]) -> bool | None:
@@ -1816,7 +2010,10 @@ class _ProvenanceRewrite(Rewrite):
                     states.append(False)
                     continue
                 if definition.op == "call":
-                    states.append(self._is_thread_data_ctor_call(definition))
+                    states.append(
+                        self._is_thread_data_ctor_call(definition)
+                        or self._is_typed_group_payload_ctor_call(definition)
+                    )
                     continue
                 sources: list[ir.Var] = []
                 if definition.op in {"cast", "exhaust_iter"}:
@@ -2149,9 +2346,9 @@ class _ProvenanceRewrite(Rewrite):
             getitem_temp_storage = getattr(func_def, "index_var", None)
         if not isinstance(getitem_temp_storage, ir.Var):
             raise CoopSinglePhaseRewriteError(
-                f"coop single-phase getitem syntax expects a runtime "
+                "coop single-phase getitem syntax expects a runtime "
                 f"temp-storage variable: '{factory.__name__}"
-                f"[temp_storage](...)'."
+                "[temp_storage](...)'."
             )
         return _ResolvedCallTarget(
             factory=factory,

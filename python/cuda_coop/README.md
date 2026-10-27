@@ -1,8 +1,9 @@
 # `cuda.coop`
 
 `cuda.coop` provides cooperative primitives for CUDA thread groups in Python
-kernel DSLs. The first backend targets Numba-CUDA-MLIR. The table below
-lists the available operations.
+kernel DSLs. They cover data movement, reductions, scans, sorting, selection,
+neighbor comparisons, counting, and run-length decoding. The first backend
+targets Numba-CUDA-MLIR and uses CUB implementations.
 
 The distribution is a universal Python wheel containing a coherent bundle of
 CUB, Thrust, and libcu++ headers. Installed-wheel compilation uses that
@@ -42,12 +43,14 @@ Python 3.10 through 3.14 is supported. The current backend integration
 requires `numba-cuda-mlir>=0.5.0,<0.6`.
 
 Backend compiler and runtime CI is configured for Linux x86-64 with Python
-3.14: CUDA 13 in pull requests and CUDA 12 in the nightly matrix. Linux host
-contracts cover Python 3.10 and 3.14. Windows checks build and import the
-universal wheel and verify its headers; they do not execute the compiler
-backend. Other combinations need separate runtime qualification. See the
+3.14: CUDA 13 in pull requests and CUDA 12 in the nightly matrix. The nightly
+matrix also configures H100 runtime tests with serial synchronization race
+checking under CUDA 13. Linux host contracts cover Python 3.10 and 3.14.
+Windows checks build and import the universal wheel and verify its headers;
+they do not execute the compiler backend. Other combinations need separate
+runtime qualification. See the
 [validation scope](https://nvidia.github.io/cccl/unstable/python/coop/developer_overview.html#coop-numba-validation)
-for tested platforms and coverage.
+for tested platforms, coverage, and hardware requirements.
 
 With Numba-CUDA-MLIR 0.5.0 through 0.5.4, keep a compiled kernel's dispatcher
 and configured launch callables in their original CUDA context. Reuse on
@@ -119,13 +122,23 @@ explains terms and concepts, including blocked and striped layouts.
 | Family | Entry points |
 | --- | --- |
 | Memory operations | `load`, `store` |
+| Reduction | `reduce`, `sum`, `reduce_batched` |
+| Scan | `scan`, `inclusive_scan`, `exclusive_scan`, `inclusive_sum`, `exclusive_sum` |
+| Data rearrangement | `exchange`, `shuffle` |
+| Comparison sorting | `merge_sort_keys`, `merge_sort_pairs` |
+| Radix sorting and ranking | `radix_sort_keys`, `radix_sort_pairs`, `radix_rank_keys` |
+| Top-k selection | `topk_min_keys`, `topk_max_keys`, `topk_min_pairs`, `topk_max_pairs` |
+| Neighbor comparisons | `adjacent_difference`, `discontinuity` |
+| Counting | `histogram` |
+| Run Length Decode | `run_length_decode`, `run_length_decode_into` |
 
 Each operation documents its supported groups and result ownership in the
-[API reference](https://nvidia.github.io/cccl/unstable/python/coop_api.html). The
-[visualizations](https://nvidia.github.io/cccl/unstable/python/coop/visualizations/index.html)
-explain these contracts with interactive diagrams and tested kernel
-examples.
-
+[API reference](https://nvidia.github.io/cccl/unstable/python/coop_api.html).
+Interactive diagrams and tested kernel examples explain these contracts in
+the [visualizations](https://nvidia.github.io/cccl/unstable/python/coop/visualizations/index.html).
+Histogram returns fresh counters that callers can accumulate in ordinary
+payloads. Bulk Run Length Decode prepares and consumes its run table within
+one call; neither API requires a persistent parent object.
 
 ## Configuration
 
@@ -133,7 +146,7 @@ Runtime configuration is controlled by these environment variables:
 
 | Variable | Effect |
 | --- | --- |
-| `CUDA_COOP_DISABLE_AUTO_DSL_REGISTRATION` | A truthy value disables automatic backend activation during `cuda.coop` import. Explicit qualified-backend import still works. |
+| `CUDA_COOP_DISABLE_AUTO_DSL_REGISTRATION` | A truthy value disables automatic backend activation during `cuda.coop` import. Explicit `coop.register(...)` and backend imports still work. |
 | `CUDA_COOP_CCCL_ROOT` | Selects a CCCL source checkout or a `cuda-coop` header bundle. An invalid configured root is an error; resolution does not fall back to another CCCL source. |
 | `CUDA_COOP_ENABLE_CACHE` | A truthy value enables the persistent compiler cache. The value is read when the backend cache module is imported. |
 | `XDG_CACHE_HOME` | On Linux and other POSIX systems, sets the cache base directory; entries are stored in `<value>/cccl`. Unset, empty, or relative values fall back to `~/.cache/cccl`. Read when the backend cache module is imported. |
@@ -143,8 +156,10 @@ Runtime configuration is controlled by these environment variables:
 | `CUDA_HOME` | Supplies `<value>/include` after `CUDA_PATH` under the same fallback rule. |
 | `CUDA_ROOT` | Supplies `<value>/include` after `CUDA_HOME` under the same fallback rule. |
 
-On POSIX, `/usr/local/cuda/include` is tried last if those mechanisms do
-not resolve CUDA headers.
+On POSIX, `/usr/local/cuda/include` is tried last. Windows uses
+`cuda-pathfinder` or the configured toolkit roots above, without the Unix
+fallback. Compilation reports a header-resolution error if none resolves
+valid CUDA headers.
 
 The build recognizes these CMake cache variables:
 
@@ -250,7 +265,7 @@ Warp Load and Store accept `this_warp()` and support `direct`, `striped`,
 logical groups with `this_warp().group_by(width)`, where `width` is 1, 2, 4,
 8, 16, or 32. The enclosing block must contain a multiple of 32 threads and
 must not have an incomplete final physical warp. Every member of a
-participating group must reach the collective; complete sibling logical
+participating group must reach the primitive; complete sibling logical
 groups may diverge. `direct` and `vectorize` expose blocked payloads,
 `striped` exposes a striped payload, and `transpose` uses striped memory
 transactions while exposing a blocked payload.
@@ -268,13 +283,39 @@ in the block; static offsets are checked during planning. `valid_items` is
 relative to each group's own tile, not the entire block, and must be uniform
 within that group.
 
-`ThreadGroup` objects are descriptor-only in this release. Runtime query,
-membership, and synchronization methods such as `rank`, `count`, `rank_as`,
-`count_as`, `sync`, `sync_aligned`, and `is_member` are not exposed.
+`ThreadGroup` follows the C++ hierarchy query surface.
+`rank(level="thread")` and `count(level="thread")` accept `thread` (or
+`gpu_thread`), `warp`, `block`, `cluster`, and `grid`; logical and mapped
+`group_by` groups have narrower limits, described below. Results use the
+unsigned type of the matching C++ hierarchy query: normally `uint32`, and
+`uint64` when the group or queried outer level is the grid. Use
+`rank_as(dtype, level="thread")` or `count_as(dtype, level="thread")` to
+select an explicit signed or unsigned 8-, 16-, 32-, or 64-bit integer dtype.
+`is_member()` returns an integer membership flag.
+
+`sync()` and `sync_aligned()` expose the matching non-grid group barriers. All
+participating members must reach `sync()`. `sync_aligned()` additionally
+requires the caller to keep the group aligned and converged. Grid
+synchronization is not available because this backend cannot request a
+cooperative grid launch.
+
+The `count` and `exhaustive` arguments of `group_by` must be compile-time
+constants. A logical threads-within-warp group can query its threads and
+immediate parent Warp; a mapped warps-within-block group can query its
+threads, physical Warps, and immediate parent block. Queries above the
+immediate physical parent are rejected. Mapped warps-within-block groups
+expose queries and `is_member()` but not `sync()` or `sync_aligned()`; the
+planner does not manage the lifetime of their block barriers. For a
+non-exhaustive partition, use `is_member()` to guard rank-dependent work
+for excluded threads. Do not use that branch to skip a primitive unless the
+primitive's participation contract explicitly permits it; every required
+group or parent-group participant must still reach the primitive.
 
 ## Temporary storage
 
-Block Load and Store accept an optional caller descriptor:
+Block Load, Store, Reduce, Scan, Merge Sort, Radix Sort, TopK, Adjacent
+Difference, Discontinuity, Histogram, and both Run Length Decode forms accept
+an optional caller descriptor:
 
 ```python
 storage = coop.TempStorage(
@@ -286,25 +327,27 @@ storage = coop.TempStorage(
 coop.load(block, source, items, algorithm="transpose", temp_storage=storage)
 ```
 
-For block, physical Warp, and logical Warp calls, `direct`, `striped`, and
-`vectorize` are storage-free: they default-construct CUB primitives without
-shared-memory allocation, pointer arguments, or barriers. For block calls,
-an explicit descriptor is validated but does not change their code
-generation. Construct `TempStorage` inside the kernel; module-global storage
-descriptors cannot be resolved. A descriptor may be passed to a device
-helper that Numba-CUDA-MLIR inlines into the kernel, which is the default.
+For Load and Store on block, physical Warp, and logical Warp groups,
+`direct`, `striped`, and `vectorize` are storage-free: they
+default-construct CUB primitives without shared-memory allocation, pointer
+arguments, or barriers. For block calls, an explicit descriptor is validated
+but does not change their code generation. Construct `TempStorage` inside
+the kernel; module-global storage descriptors cannot be resolved. A
+descriptor may be passed to a device helper that Numba-CUDA-MLIR inlines
+into the kernel, which is the default.
 
-The three block transpose algorithms use CUB temporary storage. Without a
-descriptor, the compiler allocates the specialization's exact storage and
-inserts a block reuse barrier. A caller descriptor selects shared or
-exclusive slices and may request capacity and alignment. Both explicit and
-omitted storage participate in the shared-memory plan and launch accounting.
-The provider determines the required byte count and alignment.
+The three block transpose Load/Store algorithms use CUB temporary storage,
+as do the other listed block operations. Without a descriptor, the compiler
+allocates the specialization's exact storage and inserts a block reuse
+barrier. A caller descriptor selects shared or exclusive slices and may
+request capacity and alignment. Both explicit and omitted storage
+participate in the shared-memory plan and launch accounting. The provider
+determines the required byte count and alignment.
 
-A descriptor's `sharing` selects only the slice layout: `"shared"` overlaps
-every call that passes the same descriptor on one region, while
-`"exclusive"` gives each call site its own slice. A call site inside a loop
-reuses its slice under either layout, so `auto_sync` is independent of
+A descriptor's `sharing` selects the primitive scratch layout: `"shared"`
+overlaps primitive calls that pass the same descriptor on one region, while
+`"exclusive"` gives each primitive call site its own slice. A call site inside
+a loop reuses its slice under either layout, so `auto_sync` is independent of
 `sharing` and defaults to `False` for both.
 
 Exclusive slices use more shared memory to avoid barriers needed solely for
@@ -324,6 +367,28 @@ kernel's own shared-memory traffic. With `auto_sync=False`, the caller issues
 counts as a reuse on every iteration. Compiler-owned storage always
 synchronizes.
 
+Numba-CUDA-MLIR also supports `storage.reserve(num_elems, dtype, alignment=None)`
+inside a kernel. It returns an ordinary one-dimensional shared array for
+application data or another device library. The count, integer/float/complex
+scalar dtype, and optional byte alignment must be compile-time constants.
+Reservations inherit the descriptor's sharing policy. The default
+`sharing="shared"` aliases reservations and primitive scratch within the same
+descriptor, using their maximum size and alignment requirements.
+`sharing="exclusive"` separates every primitive and reservation call site.
+Different descriptors always have separate storage. Use separate descriptors
+or exclusive storage for simultaneously live buffers. Repeating a reservation
+call site reuses its region. Explicit capacity must cover the selected layout
+and any alignment padding.
+
+Descriptors used with `reserve()` must have `auto_sync=False` or `None`;
+`auto_sync=True` is rejected. The caller supplies synchronization and each
+library's completion and release operations. The runnable
+[nvmath FFT](examples/numba_mlir/nvmath_fft.py) and
+[nvmath + NVSHMEM](examples/numba_mlir/nvmath_nvshmem.py) examples demonstrate
+the array and pointer consumers. Their
+[instructions](examples/numba_mlir/README.md) cover dependencies and launch
+commands.
+
 All descriptors and compiler-owned requirements of a kernel share one
 shared-memory backing. Up to 48 KiB, the compiler uses static shared memory
 without querying the device. Larger requests trigger a query of the device's
@@ -334,8 +399,8 @@ allocations reliably. A kernel using cooperative temporary storage must not
 also declare a zero-sized or runtime-sized `cuda.shared.array`. When
 cooperative backing becomes dynamic, user static shared arrays are also
 unsupported. Keep both user arrays and cooperative backing static, or move the
-user data out of shared memory. Storage-free operations do not add this
-restriction.
+user data out of shared memory. Reduce uses the same cooperative backing,
+including when `temp_storage` is omitted.
 
 With `auto_sync=False`, a descriptor must originate from exactly one
 constructor site. Selecting between multiple manual-sync constructors is
@@ -344,7 +409,7 @@ merged region, even when a particular program supplies sufficient barriers.
 
 Cooperative calls in device helpers must be inlined into the kernel; use
 `@cuda.jit(device=True, inline="always")` when selecting the helper's
-policy explicitly. Standalone collective helpers and collectives inside
+policy explicitly. Standalone primitive helpers and primitives inside
 standalone callbacks are unsupported. `literal_unroll` values cannot determine
 cooperative payload extents, group dimensions, selectors, or descriptor
 constructor arguments. Use separate calls with explicit constants, or an
@@ -355,6 +420,250 @@ Warp `transpose` uses compiler-owned storage with one disjoint slice per
 physical or logical group and inserts `syncwarp` with the exact group mask.
 Explicit `TempStorage` is rejected by both the common and qualified APIs for
 every Warp Load and Store algorithm, including the storage-free modes.
+
+## Reduce and Sum
+
+`sum(group, value, ...)` and `reduce(group, value, binary_op=..., ...)` return
+one scalar with the payload element dtype. Block, physical-Warp, and
+logical-Warp reductions accept a numeric scalar or fixed-size `ThreadData`;
+every item in every participating thread contributes. The qualified
+`cuda.coop.numba_mlir` API also accepts fixed-size `cuda.local.array` payloads.
+Logical Warp widths may be powers of two from 1 through 32 or any width from
+17 through 31. CUB supports only one non-power-of-two group per physical Warp.
+The block must contain complete physical Warps. For a non-power-of-two width,
+use `group_by(width, exhaustive=False)` and guard the reduction with
+`group.is_member()` so trailing lanes do not participate.
+
+Every reduction uses CUB. Only rank zero of each selected group has a defined
+result; other members must still execute the call and must not consume their
+returned value. For example, this full block reduction combines
+`items_per_thread` values per thread but writes only from the block root:
+
+```python
+from numba_cuda_mlir import cuda, types
+
+from cuda import coop
+
+
+@cuda.jit
+def block_sum(source, output, items_per_thread):
+    thread = cuda.threadIdx.x
+    values = coop.ThreadData(items_per_thread)
+    for item in range(items_per_thread):
+        values[item] = source[items_per_thread * thread + item]
+    total = coop.sum(coop.this_block(), values)
+    if thread == 0:
+        output[0] = total
+```
+
+The complete runnable form is in `examples/numba_mlir/block_sum.py`.
+
+`sum` selects addition. `reduce` accepts the aliases `+`, `sum`, `add`, and
+`plus`; `*`, `mul`, `multiply`, and `multiplies`; `min` and `minimum`; `max`
+and `maximum`; and the bitwise pairs `&`/`bit_and`, `|`/`bit_or`, and
+`^`/`bit_xor`. Bitwise reductions require an integer payload dtype. The
+qualified API additionally recognizes the corresponding Python `operator`
+functions and NumPy ufuncs. Built-in operator and algorithm selectors are
+normalized to canonical lowercase strings. Enum-like and other non-string
+selector objects are rejected.
+
+The following controls select the reduction form:
+
+- `valid_items` reduces the first N scalar values by linear group rank. It is
+  available for block, physical-Warp, and logical-Warp groups. N must be
+  uniform within the group and satisfy
+  `1 <= N <= group_size`. Static violations are rejected during compilation;
+  runtime violations execute a deterministic device trap before CUB's 32-bit
+  parameter is formed, invalidating the current CUDA context.
+- `algorithm` selects block-only `raking_commutative_only`, `raking`, or
+  `warp_reductions` (the default). Scalar and fixed-array
+  payloads are supported. `raking_commutative_only` is restricted to Sum and
+  recognized commutative built-ins. The addition-specific nondeterministic CUB
+  variant is intentionally not exposed.
+- A custom Python device callback is available only through
+  `cuda.coop.numba_mlir.reduce`. It must be associative and stateless. It
+  supports scalar or fixed-array payloads for block, physical-Warp, and
+  logical-Warp groups. Stateful callbacks are unsupported.
+
+Every required member must participate in converged control flow. Omitting
+`temp_storage` uses compiler-owned shared storage with automatic
+synchronization: a block barrier for Block Reduce and `syncwarp` with the
+participating mask for Warp Reduce.
+
+Block Reduce also accepts `temp_storage=scratch`, where `scratch` is a
+`coop.TempStorage()` descriptor. It follows the same sizing, alignment,
+sharing, and synchronization policy as Block Load/Store. An explicit descriptor
+defaults to `auto_sync=False`; insert a block barrier between uses, or choose
+`coop.TempStorage(auto_sync=True)`. Warp Reduce uses compiler-owned storage.
+
+Grid Reduce and Sum are unsupported because a grid reduction requires hidden
+per-launch workspace; use a separate kernel or explicitly managed multi-stage
+reduction instead.
+
+## Scan
+
+The Scan family has five spellings: `scan`, `exclusive_scan`,
+`inclusive_scan`, `exclusive_sum`, and `inclusive_sum`. `scan` selects its form
+with `mode="exclusive"` or `mode="inclusive"`; the other names make that choice
+explicit. Every form returns a fresh scalar or per-thread payload and leaves
+the input unchanged.
+
+Block Scan accepts a numeric scalar, fixed-size `ThreadData`, or, in the
+qualified `cuda.coop.numba_mlir` API, a fixed-size `cuda.local.array`. The
+`raking`, `raking_memoize`, and `warp_scans` algorithms are available for
+blocks. Physical- and logical-Warp Scan accept one scalar per thread and have
+no algorithm selector.
+
+Sum is the default operation. `scan`, `exclusive_scan`, and `inclusive_scan`
+accept the same built-in string aliases as Reduce. The qualified API also
+recognizes the corresponding Python `operator` functions and NumPy ufuncs, and
+accepts stateless binary device callbacks. Binary callbacks must be
+associative and return the input dtype. A non-sum exclusive scan requires an
+`initial_value` with the payload dtype. Ordinary Python literals are checked
+and converted in that context. A block-prefix callback can supply that prefix
+instead. Inclusive scans reject an initial value.
+
+The qualified API also accepts `aggregate_output`, an exact-dtype one-item
+`ThreadData` or local array populated with the group aggregate on every
+member. Warp forms accept `valid_items`, which selects the first N lanes by
+group rank and requires `1 <= N <= warp_width`; only those N result lanes are
+defined. The aggregate excludes the exclusive initial value and any input
+lanes beyond `valid_items`. The initial value and `valid_items` must be
+uniform within the group. At runtime, an invalid `valid_items` count triggers
+a deterministic device trap before CUB's 32-bit parameter is formed. The trap
+invalidates the current CUDA context.
+
+All five qualified Block Scan spellings accept a block-prefix callback through
+the `prefix_op` keyword. A stateless callback receives the block aggregate and
+returns the prefix:
+
+```python
+from numba_cuda_mlir import cuda, types
+
+import cuda.coop.numba_mlir as coop
+
+
+@cuda.jit(device=True)
+def prefix_after_aggregate(block_aggregate):
+    return block_aggregate + 7
+
+
+# Inside a kernel:
+scanned = coop.exclusive_sum(
+    coop.this_block(),
+    value,
+    prefix_op=prefix_after_aggregate,
+)
+```
+
+For a running prefix, wrap a two-argument device callback in
+`StatefulFunction`. Its first argument is a one-item state payload and its
+second is the block aggregate. Pass the state as the third positional
+argument:
+
+```python
+@cuda.jit(device=True)
+def carry_prefix(state, block_aggregate):
+    previous = state[0]
+    state[0] = previous + block_aggregate
+    return previous
+
+
+running_prefix = coop.StatefulFunction(carry_prefix, types.int64)
+
+# Inside a kernel, before a loop over tiles:
+state = coop.ThreadData(1)
+state[0] = types.int64(0)
+scanned = coop.exclusive_sum(
+    coop.this_block(),
+    value,
+    state,
+    prefix_op=running_prefix,
+)
+```
+
+The state may be a numeric one-item `ThreadData` or local array. Its dtype must
+exactly match the `StatefulFunction` descriptor, but may differ from the scan
+payload dtype. Keep the same state object alive across repeated calls and give
+every participating thread the same initial contents. CUB may invoke the
+callback in every lane of the block's first warp, but only lane 0's returned
+prefix is applied; only thread 0's state is authoritative after the calls.
+
+Prefix callbacks are available only through qualified Block Scan. They are
+mutually exclusive with `initial_value` and `aggregate_output`, are not
+stateful binary `scan_op` values, and do not support Warp Scan, `valid_items`,
+or structured state.
+
+All Scan providers use CUB temporary storage. Block calls use compiler-owned
+scratch or an explicit `TempStorage` descriptor. Backing may use static or
+dynamic shared memory. Compiler-owned scratch and explicit descriptors with
+`auto_sync=True` append a block reuse barrier. Explicit descriptors default to
+`auto_sync=False`, so the caller must synchronize before reuse. Physical and
+logical Warp calls use compiler-owned per-Warp storage and append `syncwarp`
+for the exact participating mask. Prefix callbacks keep these storage rules.
+When repeated calls reuse an explicit descriptor, set `auto_sync=True` or
+issue `cuda.syncthreads()` before reuse. The prefix state is a per-thread
+payload that persists across calls; it is not CUB temporary storage.
+
+This example uses the common API to load a block tile, compute its exclusive
+sum, and store the out-of-place result:
+
+```python
+import numpy as np
+from numba_cuda_mlir import cuda
+
+from cuda import coop
+
+
+@cuda.jit
+def block_scan_kernel(values, prefixes, items_per_thread):
+    block = coop.this_block()
+    items = coop.ThreadData(items_per_thread)
+    coop.load(block, values, items)
+    scanned = coop.exclusive_sum(block, items)
+    coop.store(block, prefixes, scanned)
+```
+
+The complete runnable form is in `examples/numba_mlir/block_scan.py`.
+
+## Exchange and Shuffle
+
+`exchange(group, value, mode=...)` returns a fresh payload and leaves `value`
+unchanged. The common API accepts `striped_to_blocked` and
+`blocked_to_striped` for block, physical Warp, and logical Warp groups. A
+blocked tile gives each thread consecutive items. A striped tile gives item
+`i` to thread `i % group_size` at per-thread position `i // group_size`.
+
+The qualified `cuda.coop.numba_mlir.exchange` API additionally exposes the
+block-only `warp_striped_to_blocked` and `blocked_to_warp_striped` layouts and
+the CUB scatter modes. Scatter ranks are local to the selected group tile and
+must use a signed integer `ThreadData` or local-array payload with the same
+extent as `value`. Unguarded ranks must be in
+`[0, group_size * items_per_thread)`. Guarded scatter skips negative ranks;
+every nonnegative rank must still be in range. Flagged scatter uses only ranks
+whose corresponding non-boolean integer flag is nonzero; each active rank must
+be in range. Active destinations must be unique for a deterministic result;
+holes and duplicate destinations are otherwise unspecified.
+`warp_time_slicing=True` is available only for block Exchange and is not valid
+for guarded or flagged scatter.
+
+`shuffle(block, value, mode=...)` is block-only. The common API accepts a
+`ThreadData` payload, `up` or `down`, and the fixed distance `1`; the vacated
+edge item is unspecified. The qualified API also accepts scalar `offset` and
+`rotate` modes. Offset distance is signed, may vary by thread, and must fit a
+signed 32-bit integer. Static overflows are rejected during compilation;
+runtime overflows trap before narrowing to CUB. Within that range, a source
+rank outside the block leaves that thread's result unspecified. Rotate
+distance may be static or runtime and must satisfy
+`0 < distance < block_threads`. An invalid runtime Rotate distance also
+executes a device trap. A trap invalidates that CUDA context, so validate
+untrusted distances before launch.
+
+Exchange and Shuffle require converged participation by every member of the
+selected group. They use compiler-owned CUB temporary storage and append a
+reuse barrier after every call. Block operations use one block-wide storage
+instance and `syncthreads`; physical and logical Warp Exchange use one
+disjoint slice per group and `syncwarp` with the exact group mask.
 
 These APIs are compile-time kernel constructs. Calling them outside a
 compatible compiler context reports a structured context error.

@@ -26,9 +26,10 @@
 
    coop/programming_guide
    coop/developer_overview
+   coop/debugger_walkthrough_temp_storage
 
 ``cuda.coop`` brings CCCL's optimized cooperative algorithms to Python GPU
-kernels. Use it when threads need to work together, such as loading a tile
+kernels. Use it when threads need to work together, such as summing a tile
 of values or arranging data for the next stage of a computation. These
 operations run inside a kernel, where you can combine them with your own
 code and reuse algorithms maintained and tuned for NVIDIA GPUs.
@@ -59,7 +60,8 @@ A cooperative operation acts on a *group* of threads, usually a warp or a
 block. Each thread owns part of the group's data, held in ``ThreadData``.
 Together, those parts form a tile.
 
-These calls copy a full tile from one array to another:
+These calls load a full tile, compute its prefix sums, and write the
+result back to memory:
 
 .. code-block:: python
 
@@ -68,12 +70,16 @@ These calls copy a full tile from one array to another:
    items = coop.ThreadData(items_per_thread)
 
    coop.load(block, source, items, offset=offset)
-   coop.store(block, destination, items, offset=offset)
+   prefixes = coop.exclusive_sum(block, items)
+   coop.store(block, destination, prefixes, offset=offset)
 
 The kernel supplies the tile's ``offset`` and a compile-time
 ``items_per_thread`` count. With 128 threads and four items per thread,
 the block processes 512 values. All threads in the group must reach the
 cooperative calls, including when only part of the tile is valid.
+
+Each block computes its own prefix sum; a device-wide scan also needs
+to combine results across blocks.
 
 The :doc:`programming concepts <coop/concepts>` explain participation,
 data layouts, operation results, and temporary storage.
@@ -107,6 +113,7 @@ To work on the integration, follow a kernel through the
 
 .. raw:: html
 
+   <span id="block-prefix-callbacks"></span>
    <span id="build-time-cmake-variables"></span>
    <span id="compilation-and-headers"></span>
    <span id="configuration"></span>
@@ -114,14 +121,14 @@ To work on the integration, follow a kernel through the
    <span id="coop-numba-context-lifetime"></span>
    <span id="coop-numba-validation"></span>
    <span id="cuda-devices-and-context-lifetime"></span>
-   <span id="data-layouts-and-algorithms"></span>
+   <span id="exchange-semantics"></span>
    <span id="groups-and-thread-data"></span>
    <span id="installation"></span>
    <span id="kernel-api"></span>
    <span id="load-and-store-semantics"></span>
    <span id="numba-cuda-mlir-validation-scope"></span>
-   <span id="participation-and-synchronization"></span>
-   <span id="per-thread-payloads"></span>
    <span id="registering-a-backend"></span>
    <span id="runtime-environment-variables"></span>
+   <span id="scan-semantics"></span>
+   <span id="shuffle-semantics"></span>
    <span id="temporary-storage"></span>

@@ -6,8 +6,8 @@
 Visualizations
 ==============
 
-Explore how ``cuda.coop`` Load and Store move values between memory and
-per-thread payloads. Change the settings, step through the stages, and select
+Explore how ``cuda.coop`` primitives move, combine, compare, count, order,
+and choose values. Change the settings, step through the stages, and select
 a value to follow its ownership. These diagrams show data movement; their
 timing and geometry do not predict GPU performance.
 
@@ -16,3 +16,15 @@ timing and geometry do not predict GPU performance.
 
    load
    store
+   exchange
+   shuffle
+   reduce
+   reduce-batched
+   scan
+   adjacent-difference
+   discontinuity
+   histogram
+   run-length-decode
+   merge-sort
+   radix
+   topk
