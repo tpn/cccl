@@ -1031,8 +1031,9 @@ class GroupPlanningContext:
             )
         if definition.op != "call":
             return None
+        function = self._callable(definition.func)
         callee = self._definition(definition.func)
-        if (
+        if function in {_cuda_local_array, _cuda_shared_array} or (
             isinstance(callee, ir.Expr)
             and callee.op == "getattr"
             and callee.attr == "reserve"
@@ -1054,24 +1055,12 @@ class GroupPlanningContext:
             ):
                 return self.dtype(dtype_definition.value, seen=seen)
             return None
-        function = self._callable(definition.func)
         if function in {ThreadData, _common_api.ThreadData}:
             bound = self.bind(function, definition)
             resolved, dtype = self.try_constant(bound.arguments["dtype"])
             if resolved and dtype is not None:
                 return normalize_dtype_param(dtype)
             return self.__thread_data_dtypes.get(id(definition))
-        if function in {_cuda_local_array, _cuda_shared_array}:
-            if len(definition.args) >= 2:
-                resolved, dtype = self.try_constant(definition.args[1])
-                if resolved:
-                    return normalize_dtype_param(dtype)
-            dtype_ref = dict(definition.kws).get("dtype")
-            if dtype_ref is not None:
-                resolved, dtype = self.try_constant(dtype_ref)
-                if resolved:
-                    return normalize_dtype_param(dtype)
-            return None
         if function is _typed_group_payload_like and definition.args:
             if (
                 len(definition.args) >= 3
