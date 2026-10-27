@@ -256,10 +256,14 @@ with ``cutlass.Int32(value)``. Integer sums can overflow, and a parallel
 floating-point sum can differ from a sequential CPU sum because the order
 of additions differs.
 
-Load returns a fresh payload when given ``items_per_thread``. To fill an
-existing payload, use ``coop.load(group, source, output)``; that form returns
-``None`` and preserves aliases to ``output``. Both typed and dtype-free
-constructors remain supported. Store returns ``None``. Transpose Store
+Prefer returning Load with ``items_per_thread`` for ordinary data movement.
+It returns a fresh payload. To fill an existing payload, use
+``coop.load(group, source, output)``; that form returns
+``None`` and updates the existing ``ThreadData`` in the current tracing region.
+CuTe reconstructs payload values across runtime control flow; an alias bound
+before a runtime loop does not become a mutable storage reference to the
+loop's payload. Both typed and dtype-free constructors remain supported.
+Store returns ``None``. Transpose Store
 algorithms may rearrange the input payload; copy values before Store if they
 are needed later. For payload
 inputs, Scan, Exchange, sorting, selection, and array Shuffle return fresh
@@ -280,6 +284,36 @@ The compiler decides which values remain in registers
 and which spill to local memory. The :ref:`qualified conversion methods
 <coop-cutlass-register-payloads>` connect payloads to CuTe register tensors
 and immutable register values.
+
+In this backend, ``ThreadData`` holds typed scalar expressions. Both Load
+forms allocate a temporary CuTe register tensor for the provider's result and
+replace the payload's scalar expressions. Passing an existing ``ThreadData``
+does not select an existing native register allocation. To write a native
+register tensor, use ``tensor.store(values.to_tensor_ssa())`` with matching
+shape and item order. The tensor retains its native storage and aliases.
+``values.to_register_tensor()`` instead creates a new register tensor.
+
+Shared-memory staging
+~~~~~~~~~~~~~~~~~~~~~
+
+Load accepts compact global- or shared-memory sources, including native CuTe
+shared tensors and typed tensors from ``TempStorage.reserve``. Store accepts
+the corresponding memory destinations. Load's output is a per-thread payload;
+use Store to place those values in shared memory, then synchronize before
+other threads load them. The return form infers its dtype from the shared
+tensor just as it does from a global-memory source.
+
+This example stages a tile in either a native allocation or a reserved
+workspace. A striped reload changes which thread owns each item, and the
+block barrier makes the preceding writes visible. Both calls use algorithms
+without cooperative scratch. The final section also demonstrates the
+existing-output Load form and a native register destination:
+
+.. literalinclude:: ../../python/cuda_coop/tests/backends/cutlass/runtime/test_shared_load_store.py
+   :language: python
+   :start-after: docs: start cutlass-shared-load-store
+   :end-before: docs: end cutlass-shared-load-store
+   :dedent: 4
 
 .. _coop-cutlass-dtype-inference:
 
@@ -431,6 +465,12 @@ operations, then synchronize participating threads as required. In particular,
 load inputs into registers and synchronize before invoking a cooperative
 primitive whose scratch aliases those inputs. A block barrier does not replace
 a library's asynchronous completion or release operation.
+
+A reserved tensor with a supported Load/Store dtype can also serve as the
+shared source or Store destination in the staging example above. Keep live
+staging data separate from scratch that an operation may overwrite. Direct
+and striped Load/Store need no cooperative scratch; a transpose operation
+requires separate scratch while it reads or writes that live staging tensor.
 
 The following example passes a reserved tensor to native CuTe code, reuses its
 bytes for a cooperative reduction, and checks that a separate native shared

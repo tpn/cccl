@@ -192,7 +192,7 @@ or a reuse barrier.
 Per-thread payloads
 ^^^^^^^^^^^^^^^^^^^
 
-``coop.load(group, source, items_per_thread=items_per_thread)`` returns each
+Prefer ``coop.load(group, source, items_per_thread=items_per_thread)`` for each
 participating thread's fixed-size ``ThreadData`` payload. Its element type
 comes from ``source``. Pass the positive compile-time count as a kernel
 argument: Numba-CUDA-MLIR specializes it automatically; CuTe kernels and their
@@ -209,6 +209,12 @@ backward inference from later uses such as Store. ``items_per_thread`` and
 output payload, so ``coop.load(group, source, 4)`` is invalid.
 A non-``None`` ``alignment`` is valid only with ``items_per_thread``; set an
 existing output's alignment when constructing it instead.
+
+Global and shared arrays can supply Load's source and receive Store's output.
+Those arrays hold a group tile; a ``ThreadData`` holds one thread's values.
+To fill a shared tile, Store the returned payload into a shared array and
+synchronize before other threads consume it. See
+:ref:`shared-memory staging <coop-shared-load-store>` for a complete example.
 
 Supported payload dtypes are signed and unsigned 8-, 16-, 32-, and 64-bit
 integers and 32- and 64-bit floating-point values. An explicit alignment is

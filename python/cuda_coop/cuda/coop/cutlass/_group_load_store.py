@@ -107,9 +107,10 @@ def load(
     Shared parameters and participation follow :func:`cuda.coop.load`. This
     implementation accepts blocks and physical or logical warps. Supply a
     positive compile-time ``items_per_thread`` to return fresh CUTLASS
-    ThreadData with the source dtype. Alternatively, supply a CUTLASS
-    ThreadData ``output`` to fill it in place and return ``None``. Its dtype
-    is inferred from the source, or must agree with it when already declared.
+    ThreadData with the source dtype; this is the preferred form.
+    Alternatively, supply a CUTLASS ThreadData ``output`` to fill it in place
+    and return ``None``. Its dtype is inferred from the source, or must agree
+    with it when already declared.
     Supply exactly one of ``output`` and ``items_per_thread``.
 
     With ``items_per_thread``, ``alignment`` requests a minimum power-of-two
@@ -117,6 +118,13 @@ def load(
     ``ThreadData``. An existing ``output`` retains its own alignment and
     requires ``alignment=None``. This option does not describe the source
     memory's alignment or change the selected item layout.
+
+    ``output`` must be ThreadData. To update an existing native CuTe register
+    tensor, load a payload and call
+    ``tensor.store(payload.to_tensor_ssa())`` with compatible shape and item
+    order. Both Load forms materialize a temporary register tensor and place
+    its scalar values in ThreadData; an output payload does not designate a
+    native register or shared-memory destination.
 
     Load populates the payload in the selected algorithm's layout. Beyond
     ``valid_items``, slots have unspecified values unless ``oob_default`` is
@@ -140,8 +148,13 @@ def load(
     The source must expose a raw pointer and a provably compact layout. A bare
     pointer object with no shape or stride metadata is also accepted, but its
     capacity is not checked. Register or local-memory tensors are rejected.
-    Load reads addressable memory, such as global or shared memory. DIRECT,
-    STRIPED, and VECTORIZE need no shared scratch or reuse barrier; an
+    Load reads addressable memory, such as global or shared memory. Shared
+    tensors from ``SmemAllocator`` and ``TempStorage.reserve`` are supported
+    when their dtype and compact layout meet these requirements. Synchronize
+    the participating threads after shared-memory writes and before Load
+    reads values produced by other threads. Use Store to write a payload to
+    shared memory. DIRECT, STRIPED, and VECTORIZE need no shared scratch or
+    reuse barrier; an
     accepted block descriptor does not change that.
 
     Transpose algorithms use shared scratch. With no ``temp_storage``, the

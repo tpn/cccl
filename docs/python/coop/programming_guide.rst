@@ -521,8 +521,9 @@ Inference follows the backend's supported producers and assignments.
 Conflicting type requirements are errors. See :ref:`element-type inference
 <coop-faq-thread-data-dtype>` for cases that need additional information.
 
-Load accepts either a positive compile-time ``items_per_thread`` count or an
-existing output payload. The count form returns a new payload, including for
+Prefer returning Load for fresh values. Load accepts either a positive
+compile-time ``items_per_thread`` count or an existing per-thread output
+payload. The count form returns a new payload, including for
 one item. Pass the count by keyword: ``coop.load(group, source, 4)`` is invalid
 because the third positional argument denotes a writable output payload.
 ``coop.load(group, source, items)`` writes into the supplied payload
@@ -566,6 +567,76 @@ Load and Store accept one-dimensional contiguous arrays. ``offset`` counts
 elements from the array's beginning. ``valid_items`` counts elements in
 the valid prefix of the selected group's tile. Both must be uniform within
 that group.
+
+.. _coop-shared-load-store:
+
+Global memory, shared memory, and per-thread values
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Load's source and Store's destination may be in global or shared memory.
+These memory operands describe a group tile. Load's result or existing
+``output`` describes only the values owned by one thread:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Call
+     - Memory direction
+     - Result
+   * - ``values = coop.load(group, source, items_per_thread=N)``
+     - Global or shared memory to per-thread values
+     - A new ``ThreadData`` payload; preferred for fresh values
+   * - ``coop.load(group, source, output)``
+     - Global or shared memory to existing per-thread storage
+     - Updates ``output`` and returns ``None``
+   * - ``coop.store(group, destination, values)``
+     - Per-thread values to global or shared memory
+     - Writes ``destination`` and returns ``None``
+
+The common API accepts ``ThreadData`` outputs. Numba-qualified Load also
+accepts supported fixed-size, one-dimensional ``cuda.local.array`` outputs;
+see :ref:`the local-array example <coop-programming-api-choice>`. A local
+array belongs to one thread and may be promoted to registers by the compiler.
+A ``cuda.shared.array`` belongs to the block and is not an accepted Load
+output. To populate a shared array, load a payload and Store it into that
+array. The allocation API does not change this distinction.
+
+This common-API example stages a tile into shared memory and reloads it with
+striped ownership, so threads read values written by other threads. The block
+barrier makes those writes visible before the reload. ``tile_items`` is a
+host-computed constant captured by the kernel, giving ``cuda.shared.array``
+a static extent:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_shared_load_store_example.py
+   :language: python
+   :start-after: # shared-load-store-example-begin
+   :end-before: # shared-load-store-example-end
+   :dedent: 4
+   :prepend: items_per_thread = 4
+
+The typed shared view returned by ``TempStorage.reserve`` can also be a
+Load source or Store destination. For example, the shared allocation above
+can be replaced inside the kernel with:
+
+.. code-block:: python
+
+   workspace = coop.TempStorage(auto_sync=False)
+   shared = workspace.reserve(tile_items, types.int32)
+
+Reserve does not initialize the view or synchronize application accesses.
+The direct Store and striped Load in this example need no primitive scratch.
+If a shared data view and a transpose-family operation use the same backing
+region, their lifetimes must not overlap. Use independent descriptors or
+``sharing="exclusive"`` for live data and scratch, and follow the
+:ref:`reservation and reuse rules <coop-temp-storage>`.
+
+This staging sequence is synchronous Load/Store plus an explicit block
+barrier. It does not expose an asynchronous global-to-shared transfer or its
+completion token. CUTLASS uses the same memory directions with native shared
+CuTe tensors; see :ref:`its executable example <coop-cutlass-load-store>`.
+
+Tile bounds and defaults
+^^^^^^^^^^^^^^^^^^^^^^^
 
 Runtime ``valid_items`` and ``offset`` accept signed integers through 64 bits
 and unsigned integers through 32 bits. Boolean, floating-point, and

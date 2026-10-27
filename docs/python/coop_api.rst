@@ -91,6 +91,12 @@ threads.
 Memory operations
 ^^^^^^^^^^^^^^^^^
 
+Prefer ``values = load(group, source, items_per_thread=N)`` for fresh
+per-thread values. ``load(group, source, output)`` fills an existing
+per-thread payload and returns ``None``. Global and shared arrays can be
+Load sources or Store destinations; a shared tile is not Load's ``output``.
+See :ref:`memory directions and staging <coop-shared-load-store>`.
+
 .. autofunction:: load
 .. autofunction:: store
 
@@ -201,6 +207,10 @@ their compiler implementation.
 Qualified calls also accept fixed-size, one-dimensional local arrays where
 the operation accepts per-thread payloads. ``local`` and ``shared`` expose
 Numba-CUDA-MLIR's memory namespaces.
+For Load, such a local array is an existing per-thread output. Shared arrays
+instead serve as Load sources and Store destinations in both the common
+and qualified APIs. Prefer returning Load unless existing per-thread storage
+must be filled; see :ref:`choosing a Load form <coop-faq-load-forms>`.
 
 .. currentmodule:: cuda.coop.numba_mlir
 

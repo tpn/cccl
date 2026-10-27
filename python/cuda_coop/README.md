@@ -217,7 +217,7 @@ For the two Boolean runtime switches, values are case-insensitive; `0`,
 ## Block and Warp Load and Store
 
 The common and qualified Load/Store APIs share algorithm names, tile
-controls, and in-place Load behavior. Numba-CUDA-MLIR and CUTLASS support the
+controls, and result ownership. Numba-CUDA-MLIR and CUTLASS support the
 same block, physical Warp, and logical Warp forms; the CUTLASS guide describes
 CuTe operands. This Numba kernel body clamps a grid tile tail, where `source`,
 `destination`, `count`, and `items_per_thread` are kernel arguments:
@@ -258,12 +258,32 @@ The [CuTe tile-copy example](examples/cutlass/block_load_store.py) uses the
 same controls with CuTe pointers. It includes allocation, launch, and a NumPy
 reference check.
 
-`load(..., items_per_thread=N)` returns a `ThreadData` payload with `N`
+Prefer `load(..., items_per_thread=N)` for a fresh `ThreadData` payload with `N`
 items per thread and the source's element type, including when `N` is one.
 Supply a positive compile-time count. To fill an existing payload, use
 `load(group, source, items, ...)`; that form returns `None` and obtains the
 count from `items`. Supply exactly one of an output payload or
 `items_per_thread`.
+
+Load reads memory into each thread's values. Both global and shared arrays
+can supply the source; Store writes per-thread values into either memory
+space. For example, inside a kernel with an allocated shared array:
+
+```python
+items = coop.load(block, source, items_per_thread=items_per_thread)
+coop.store(block, shared, items)
+block.sync()
+reloaded = coop.load(block, shared, items_per_thread=items_per_thread)
+```
+
+The output form fills existing per-thread `ThreadData`, or a supported fixed
+one-dimensional `cuda.local.array` in the Numba-qualified API. It does not
+accept a whole shared array as its output. `TempStorage.reserve()` returns a
+shared memory view that can be used as the source of Load or destination of
+Store. Keep that data disjoint from any simultaneously used primitive scratch,
+and synchronize producer/consumer phases. See the executable
+[Numba staging example](tests/backends/numba_mlir/runtime/test_shared_load_store_example.py)
+and [CuTe staging example](tests/backends/cutlass/runtime/test_shared_load_store.py).
 
 Direct `ThreadData(items_per_thread)` construction remains available for
 computed values, explicit alignment, and caller-owned outputs. Its element

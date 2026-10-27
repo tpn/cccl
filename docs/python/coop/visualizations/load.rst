@@ -10,6 +10,12 @@ Load
 tile in memory. The algorithm determines which thread reads each value and
 whether a shared-memory exchange rearranges it afterward.
 
+Prefer returning Load for a fresh payload. Its source may be global or
+shared memory; the result remains per-thread values in either case. The
+shared scratch used by transpose algorithms is distinct from a shared
+source tile. To write a tile into shared memory, use Store; see the
+:ref:`shared-memory staging example <coop-shared-load-store>`.
+
 The explorer shows eight illustrative threads. For the warp-transpose
 algorithms, it groups them into two four-lane teaching warps. **CUDA warps
 have 32 lanes**; executable blocks using these algorithms must contain a
