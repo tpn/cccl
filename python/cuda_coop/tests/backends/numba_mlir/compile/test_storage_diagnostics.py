@@ -22,7 +22,7 @@ from numba_cuda_mlir import cuda, types
 from numba_cuda_mlir.numba_cuda.core.errors import TypingError
 from numba_cuda_mlir.numba_cuda.misc.special import literal_unroll
 
-import cuda.coop.numba_mlir as coop
+import cuda.coop.numba_mlir as numba_coop
 from cuda.coop.numba_mlir._compiler._group_planner_support import (
     GroupRewriteError,
 )
@@ -67,7 +67,7 @@ def _compile(kernel, *arg_types, block=(32, 1, 1)):
 def test_release_explicit_region_returns_shared_array(qualified, dtype):
     from cuda import coop as common_coop
 
-    module = coop if qualified else common_coop
+    module = numba_coop if qualified else common_coop
 
     @cuda.jit(chip="sm_90")
     def kernel(output):
@@ -85,15 +85,15 @@ def test_release_explicit_region_returns_shared_array(qualified, dtype):
 def test_release_consumes_aliases_on_reachable_paths(action, conditional):
     @cuda.jit(chip="sm_90")
     def kernel(source, flag):
-        storage = coop.TempStorage(128)
+        storage = numba_coop.TempStorage(128)
         alias = storage
         release = alias.release
         if not conditional or flag:
             storage.release()
         if action == "primitive":
-            items = coop.ThreadData(items_per_thread=1)
-            coop.load(
-                coop.this_block(),
+            items = numba_coop.ThreadData(items_per_thread=1)
+            numba_coop.load(
+                numba_coop.this_block(),
                 source,
                 items,
                 algorithm="direct",
@@ -113,7 +113,7 @@ def test_release_consumes_aliases_on_reachable_paths(action, conditional):
 def test_release_in_loop_consumes_outer_instance_on_backedge():
     @cuda.jit(chip="sm_90")
     def kernel(output, count):
-        storage = coop.TempStorage(128)
+        storage = numba_coop.TempStorage(128)
         for i in range(count):
             view = storage.release()
             output[i] = len(view)
@@ -128,7 +128,7 @@ def test_release_in_mutually_exclusive_branches_and_fresh_loop_instances():
     @cuda.jit(chip="sm_90")
     def kernel(output, flag, count):
         for i in range(count):
-            storage = coop.TempStorage(128)
+            storage = numba_coop.TempStorage(128)
             if flag:
                 view = storage.release(types.int32)
             else:
@@ -145,7 +145,7 @@ def test_release_in_mutually_exclusive_branches_and_fresh_loop_instances():
 def test_release_requires_nonempty_compatible_region(size):
     @cuda.jit(chip="sm_90")
     def kernel(output):
-        storage = coop.TempStorage(size)
+        storage = numba_coop.TempStorage(size)
         view = storage.release(types.int32)
         output[0] = len(view)
 
@@ -161,7 +161,7 @@ def test_release_in_helper_consumes_callers_descriptor():
 
     @cuda.jit(chip="sm_90")
     def kernel(source):
-        storage = coop.TempStorage(128)
+        storage = numba_coop.TempStorage(128)
         view = handoff(storage)
         source[0] = len(view)
         storage.release()
@@ -175,9 +175,9 @@ def test_release_in_helper_consumes_callers_descriptor():
 def test_release_rejects_stale_alias_after_loop_local_reconstruction():
     @cuda.jit(chip="sm_90")
     def kernel(output, count):
-        stale = coop.TempStorage(128, auto_sync=True)
+        stale = numba_coop.TempStorage(128, auto_sync=True)
         for i in range(count):
-            storage = coop.TempStorage(128, auto_sync=True)
+            storage = numba_coop.TempStorage(128, auto_sync=True)
             if i > 0:
                 stale.release()
             stale = storage
@@ -194,7 +194,7 @@ def test_release_rejects_stale_alias_after_loop_local_reconstruction():
 def test_release_exit_or_backedge(break_after_release):
     @cuda.jit(chip="sm_90")
     def kernel(output, count):
-        storage = coop.TempStorage(128)
+        storage = numba_coop.TempStorage(128)
         for i in range(count):
             view = storage.release()
             output[i] = len(view)
@@ -215,11 +215,11 @@ def test_release_exit_or_backedge(break_after_release):
 def test_release_after_repeated_cooperative_uses():
     @cuda.jit(chip="sm_90")
     def kernel(source, output, count):
-        storage = coop.TempStorage(auto_sync=True)
-        items = coop.ThreadData(items_per_thread=1)
+        storage = numba_coop.TempStorage(auto_sync=True)
+        items = numba_coop.ThreadData(items_per_thread=1)
         for i in range(count):
-            coop.load(
-                coop.this_block(),
+            numba_coop.load(
+                numba_coop.this_block(),
                 source,
                 items,
                 algorithm="transpose",
@@ -234,14 +234,16 @@ def test_release_after_repeated_cooperative_uses():
 def test_release_then_break_does_not_consume_continuing_loop_path():
     @cuda.jit(chip="sm_90")
     def kernel(source, output, count, flag):
-        storage = coop.TempStorage(128, auto_sync=True)
-        items = coop.ThreadData(items_per_thread=1)
+        storage = numba_coop.TempStorage(128, auto_sync=True)
+        items = numba_coop.ThreadData(items_per_thread=1)
         for i in range(count):
             if flag:
                 view = storage.release()
                 output[0] = len(view)
                 break
-            coop.load(coop.this_block(), source, items, temp_storage=storage)
+            numba_coop.load(
+                numba_coop.this_block(), source, items, temp_storage=storage
+            )
 
     _compile(
         kernel, types.int32[::1], types.int32[::1], types.int32, types.boolean
@@ -251,7 +253,7 @@ def test_release_then_break_does_not_consume_continuing_loop_path():
 def test_release_rejects_runtime_dtype():
     @cuda.jit(chip="sm_90")
     def kernel(output, dtype):
-        storage = coop.TempStorage(128)
+        storage = numba_coop.TempStorage(128)
         view = storage.release(dtype)
         output[0] = len(view)
 
@@ -262,7 +264,7 @@ def test_release_rejects_runtime_dtype():
 def test_release_method_cannot_escape_to_container():
     @cuda.jit(chip="sm_90")
     def kernel(output):
-        storage = coop.TempStorage(128)
+        storage = numba_coop.TempStorage(128)
         methods = (storage.release,)
         output[0] = len(methods)
 
@@ -277,7 +279,7 @@ def test_release_requires_binding_on_every_path(conditional_binding):
         @cuda.jit(chip="sm_90")
         def kernel(output, flag):
             if flag:
-                storage = coop.TempStorage(128)
+                storage = numba_coop.TempStorage(128)
             view = storage.release()
             output[0] = len(view)
 
@@ -285,7 +287,7 @@ def test_release_requires_binding_on_every_path(conditional_binding):
 
         @cuda.jit(chip="sm_90")
         def kernel(output, flag):
-            storage = coop.TempStorage(128)
+            storage = numba_coop.TempStorage(128)
             if flag:
                 release = storage.release
             view = release()
@@ -300,11 +302,13 @@ def test_release_requires_binding_on_every_path(conditional_binding):
 def test_release_rejects_merged_independent_descriptor_regions():
     @cuda.jit(chip="sm_90")
     def kernel(source, output, flag):
-        first = coop.TempStorage(128, auto_sync=True)
-        second = coop.TempStorage(128, auto_sync=True)
+        first = numba_coop.TempStorage(128, auto_sync=True)
+        second = numba_coop.TempStorage(128, auto_sync=True)
         selected = first if flag else second
-        items = coop.ThreadData(items_per_thread=1)
-        coop.load(coop.this_block(), source, items, temp_storage=selected)
+        items = numba_coop.ThreadData(items_per_thread=1)
+        numba_coop.load(
+            numba_coop.this_block(), source, items, temp_storage=selected
+        )
         left = first.release(types.int32)
         right = second.release(types.int32)
         left[0] = 1
@@ -321,7 +325,7 @@ def test_release_rejects_descriptor_missing_on_zero_trip_loop():
     @cuda.jit(chip="sm_90")
     def kernel(output, count):
         for i in range(count):
-            storage = coop.TempStorage(128)
+            storage = numba_coop.TempStorage(128)
         view = storage.release()
         output[0] = len(view)
 
@@ -335,7 +339,7 @@ def test_release_rejects_descriptor_missing_on_zero_trip_loop():
 def test_release_rejects_unsupported_or_unaligned_dtype(dtype):
     @cuda.jit(chip="sm_90")
     def kernel(output):
-        storage = coop.TempStorage(128)
+        storage = numba_coop.TempStorage(128)
         view = storage.release(dtype)
         output[0] = len(view)
 
@@ -348,10 +352,10 @@ def test_release_retains_last_primitive_barrier_without_adding_one():
     def count_barriers(auto_sync, release_storage):
         @cuda.jit(chip="sm_90")
         def kernel(source, output):
-            storage = coop.TempStorage(auto_sync=auto_sync)
-            items = coop.ThreadData(items_per_thread=1)
-            coop.load(
-                coop.this_block(),
+            storage = numba_coop.TempStorage(auto_sync=auto_sync)
+            items = numba_coop.ThreadData(items_per_thread=1)
+            numba_coop.load(
+                numba_coop.this_block(),
                 source,
                 items,
                 algorithm="transpose",
@@ -388,7 +392,7 @@ def test_load_store_unexpected_keyword_raises_type_error(
 ):
     from cuda import coop as portable_coop
 
-    module = coop if qualified else portable_coop
+    module = numba_coop if qualified else portable_coop
     primitive = module.load if operation == "load" else module.store
 
     def copy(data, items_per_thread):
@@ -433,7 +437,7 @@ def test_load_store_unexpected_keyword_raises_type_error(
 def test_load_return_cannot_be_used_as_a_store_payload(qualified, dtype):
     from cuda import coop as common_coop
 
-    module = coop if qualified else common_coop
+    module = numba_coop if qualified else common_coop
 
     @cuda.jit(chip="sm_90")
     def kernel(source, destination):
@@ -450,11 +454,11 @@ def test_rebound_explicit_dtype_is_not_replaced_by_write_inference():
     def kernel(destination):
         if destination[0] > 0:
             dtype = types.int32
-            first = coop.ThreadData(items_per_thread=2, dtype=dtype)
+            first = numba_coop.ThreadData(items_per_thread=2, dtype=dtype)
             first[0] = 16777217
             destination[0] = first[0]
             dtype = types.float32
-            second = coop.ThreadData(items_per_thread=2, dtype=dtype)
+            second = numba_coop.ThreadData(items_per_thread=2, dtype=dtype)
             second[0] = 1.5
             destination[1] = second[0]
 
@@ -475,11 +479,16 @@ def test_rebound_shared_shape_is_rejected_with_cooperative_storage():
             static = cuda.shared.array(size, types.int32)
             dynamic[cuda.threadIdx.x] = 1
             static[cuda.threadIdx.x] = 2
-            payload = coop.ThreadData(items_per_thread=2, dtype=types.int32)
+            payload = numba_coop.ThreadData(
+                items_per_thread=2, dtype=types.int32
+            )
             payload[0] = dynamic[cuda.threadIdx.x]
             payload[1] = static[cuda.threadIdx.x]
-            coop.store(
-                coop.this_block(), destination, payload, algorithm="transpose"
+            numba_coop.store(
+                numba_coop.this_block(),
+                destination,
+                payload,
+                algorithm="transpose",
             )
 
     with pytest.raises(
@@ -492,13 +501,15 @@ def test_rebound_shared_shape_is_rejected_with_cooperative_storage():
 def test_default_helper_accepts_descriptor_alias_chain(items_per_thread):
     @cuda.jit(device=True)
     def helper(source, storage, items_per_thread):
-        payload = coop.ThreadData(items_per_thread, dtype=types.int32)
-        coop.load(coop.this_block(), source, payload, temp_storage=storage)
+        payload = numba_coop.ThreadData(items_per_thread, dtype=types.int32)
+        numba_coop.load(
+            numba_coop.this_block(), source, payload, temp_storage=storage
+        )
         return payload[0]
 
     @cuda.jit(chip="sm_90")
     def kernel(source, destination, items_per_thread):
-        storage = coop.TempStorage()
+        storage = numba_coop.TempStorage()
         alias = storage
         chained = alias
         destination[cuda.threadIdx.x] = helper(
@@ -517,11 +528,13 @@ def test_none_alias_reports_descriptor_error_before_type_inference():
     @cuda.jit(chip="sm_90")
     def kernel(source, destination):
         empty = None
-        storage = coop.TempStorage()
+        storage = numba_coop.TempStorage()
         if source[0] > 0:
             storage = empty
-        payload = coop.ThreadData(items_per_thread=1, dtype=types.int32)
-        coop.load(coop.this_block(), source, payload, temp_storage=storage)
+        payload = numba_coop.ThreadData(items_per_thread=1, dtype=types.int32)
+        numba_coop.load(
+            numba_coop.this_block(), source, payload, temp_storage=storage
+        )
         destination[cuda.threadIdx.x] = payload[0]
 
     with pytest.raises(
@@ -533,7 +546,7 @@ def test_none_alias_reports_descriptor_error_before_type_inference():
 def test_standalone_primitive_helper_reports_inline_requirement():
     @cuda.jit(device=True, inline="never")
     def standalone(destination, value):
-        coop.store(coop.this_block(), destination, value)
+        numba_coop.store(numba_coop.this_block(), destination, value)
 
     @cuda.jit(chip="sm_90")
     def kernel(source, destination):
@@ -555,14 +568,14 @@ def test_literal_unroll_cannot_determine_cooperative_payload_shape(
     def kernel(source, destination):
         for count in literal_unroll((1, 2)):
             if payload_kind == "thread_data":
-                payload = coop.ThreadData(
+                payload = numba_coop.ThreadData(
                     items_per_thread=count, dtype=types.int32
                 )
             elif payload_kind == "local_array":
                 payload = cuda.local.array(count, types.int32)
             else:
                 payload = cuda.local.array(shape=count, dtype=types.int32)
-            coop.load(coop.this_block(), source, payload)
+            numba_coop.load(numba_coop.this_block(), source, payload)
             destination[cuda.threadIdx.x] = payload[0]
 
     with pytest.raises(
@@ -578,7 +591,7 @@ def test_unrelated_literal_unroll_can_coexist_with_cooperative_calls():
         value = 0
         for item in literal_unroll((1, 2)):
             value += item
-        coop.store(coop.this_block(), destination, value)
+        numba_coop.store(numba_coop.this_block(), destination, value)
 
     assert _compile(kernel, types.int64[::1]).metadata["ltoir"]
 
@@ -588,7 +601,9 @@ def test_storage_free_operation_can_coexist_with_user_dynamic_shared_memory():
     def kernel(destination):
         mine = cuda.shared.array(0, types.int32)
         mine[cuda.threadIdx.x] = 42
-        coop.store(coop.this_block(), destination, mine[cuda.threadIdx.x])
+        numba_coop.store(
+            numba_coop.this_block(), destination, mine[cuda.threadIdx.x]
+        )
 
     assert _compile(kernel, types.int32[::1]).metadata["ltoir"]
 
@@ -597,8 +612,8 @@ def test_literal_unroll_cannot_determine_cooperative_selector():
     @cuda.jit(chip="sm_90")
     def kernel(source, destination):
         for algorithm in literal_unroll(("direct", "striped")):
-            coop.store(
-                coop.this_block(),
+            numba_coop.store(
+                numba_coop.this_block(),
                 destination,
                 source[cuda.threadIdx.x],
                 algorithm=algorithm,
@@ -622,10 +637,10 @@ def test_numpy_integer_shared_shapes_coexist_with_cooperative_storage(shape):
         mine = cuda.shared.array(shape, types.int32)
         thread = cuda.threadIdx.x
         mine[thread] = source[thread]
-        payload = coop.ThreadData(items_per_thread=1, dtype=types.int32)
+        payload = numba_coop.ThreadData(items_per_thread=1, dtype=types.int32)
         payload[0] = mine[thread]
-        coop.store(
-            coop.this_block(), destination, payload, algorithm="transpose"
+        numba_coop.store(
+            numba_coop.this_block(), destination, payload, algorithm="transpose"
         )
 
     assert _compile(kernel, types.int32[::1], types.int32[::1]).metadata[
@@ -674,11 +689,11 @@ def test_inlined_user_shared_allocation_is_checked_after_inlining(
         mine = user_allocation(source[0])
         thread = cuda.threadIdx.x
         mine[thread] = source[thread]
-        storage = coop.TempStorage(size_in_bytes)
-        payload = coop.ThreadData(items_per_thread=1, dtype=types.int32)
+        storage = numba_coop.TempStorage(size_in_bytes)
+        payload = numba_coop.ThreadData(items_per_thread=1, dtype=types.int32)
         payload[0] = mine[thread]
-        coop.store(
-            coop.this_block(),
+        numba_coop.store(
+            numba_coop.this_block(),
             destination,
             payload,
             algorithm="transpose",
@@ -707,12 +722,14 @@ def test_literal_unroll_cannot_determine_cooperative_storage_or_partition(
     @cuda.jit(chip="sm_90")
     def kernel(source, destination):
         for count in literal_unroll((32, 64)):
-            block = coop.this_block()
+            block = numba_coop.this_block()
             if argument == "storage":
-                storage = coop.TempStorage(count)
-                payload = coop.ThreadData(items_per_thread=1, dtype=types.int32)
+                storage = numba_coop.TempStorage(count)
+                payload = numba_coop.ThreadData(
+                    items_per_thread=1, dtype=types.int32
+                )
                 payload[0] = source[cuda.threadIdx.x]
-                coop.store(
+                numba_coop.store(
                     block,
                     destination,
                     payload,
@@ -721,7 +738,7 @@ def test_literal_unroll_cannot_determine_cooperative_storage_or_partition(
                 )
             else:
                 group = block.group_by(count)
-                coop.store(group, destination, source[cuda.threadIdx.x])
+                numba_coop.store(group, destination, source[cuda.threadIdx.x])
 
     with pytest.raises(
         (GroupRewriteError, TypingError),
@@ -749,11 +766,11 @@ def test_implicit_oversized_storage_rejects_user_static_shared_allocation(
         mine = cuda.shared.array(1024, types.int32)
         thread = cuda.threadIdx.x
         mine[thread] = source[thread]
-        payload = coop.ThreadData(items_per_thread=16, dtype=types.int32)
+        payload = numba_coop.ThreadData(items_per_thread=16, dtype=types.int32)
         for item in range(16):
             payload[item] = mine[thread]
-        coop.store(
-            coop.this_block(), destination, payload, algorithm="transpose"
+        numba_coop.store(
+            numba_coop.this_block(), destination, payload, algorithm="transpose"
         )
 
     with pytest.raises(
@@ -764,3 +781,91 @@ def test_implicit_oversized_storage_rejects_user_static_shared_allocation(
         ),
     ):
         _compile(kernel, types.int32[::1], types.int32[::1], block=(1024, 1, 1))
+
+
+@pytest.mark.parametrize("kind", ["block", "warp", "logical_warp"])
+@pytest.mark.parametrize("shape", [0, 128], ids=["dynamic", "static"])
+def test_reduce_shared_memory_coexistence(kind, shape):
+    """CUB scratch follows the common backing allocation's alias checks."""
+
+    @cuda.jit(device=True)
+    def allocate():
+        return cuda.shared.array(shape, types.int32)
+
+    @cuda.jit(chip="sm_90")
+    def kernel(source, destination):
+        tile = allocate()
+        thread = cuda.threadIdx.x
+        tile[thread] = source[thread]
+        cuda.syncthreads()
+        if kind == "block":
+            group = numba_coop.this_block()
+        elif kind == "warp":
+            group = numba_coop.this_warp()
+        else:
+            group = numba_coop.this_warp().group_by(8)
+        total = numba_coop.sum(group, source[thread])
+        if group.rank() == 0:
+            destination[thread] = tile[thread] + total
+
+    if shape:
+        assert _compile(
+            kernel, types.int32[::1], types.int32[::1], block=(128, 1, 1)
+        ).metadata["ltoir"]
+    else:
+        with pytest.raises(
+            CoopSinglePhaseRewriteError,
+            match="shared-memory backing.*dynamic/runtime-sized.*would alias",
+        ):
+            _compile(
+                kernel, types.int32[::1], types.int32[::1], block=(128, 1, 1)
+            )
+
+
+def test_reduce_uses_dynamic_cooperative_backing(monkeypatch):
+    from cuda.coop.numba_mlir._compiler import _rewrite_storage
+
+    monkeypatch.setattr(
+        _rewrite_storage,
+        "_query_device_shared_memory_limits",
+        lambda: {
+            "max_default_shared_memory_per_block": 48 * 1024,
+            "max_optin_shared_memory_per_block": 96 * 1024,
+        },
+    )
+
+    @cuda.jit(chip="sm_90")
+    def kernel(source, destination):
+        scratch = numba_coop.TempStorage(64 * 1024, auto_sync=True)
+        items = numba_coop.ThreadData(items_per_thread=2, dtype=types.int32)
+        numba_coop.load(
+            numba_coop.this_block(),
+            source,
+            items,
+            algorithm="transpose",
+            temp_storage=scratch,
+        )
+        total = numba_coop.sum(
+            numba_coop.this_block(), items, temp_storage=scratch
+        )
+        if cuda.threadIdx.x == 0:
+            destination[0] = total
+
+    compiled = _compile(
+        kernel, types.int32[::1], types.int32[::1], block=(128, 1, 1)
+    )
+    assert compiled.metadata["required_dynamic_shared_memory"] == 64 * 1024
+
+
+def test_group_query_allows_user_dynamic_arrays():
+    @cuda.jit(chip="sm_90")
+    def kernel(source, destination):
+        tile = cuda.shared.array(0, types.int32)
+        thread = cuda.threadIdx.x
+        tile[thread] = source[thread]
+        result = numba_coop.this_block().group_by(2).rank()
+        destination[thread] = tile[thread] + result
+
+    assert _compile(
+        kernel, types.int32[::1], types.int32[::1], block=(128, 1, 1)
+    ).metadata["ltoir"]
