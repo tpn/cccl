@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from .._core.api import TempStorageLike, ThreadDataLike
+from .._core.api import PendingSharedCopyLike, TempStorageLike, ThreadDataLike
+from .._core.api import load_to_shared_async as load_to_shared_async
 from ._group._exchange import exchange
 from ._group._histogram import histogram as histogram
 from ._group._load_store import load, store
@@ -47,6 +48,7 @@ from ._thread_group import (
 
 __all__ = [
     "Hierarchy",
+    "PendingSharedCopyLike",
     "StatefulFunction",
     "TempStorage",
     "TempStorageLike",
@@ -63,6 +65,7 @@ __all__ = [
     "inclusive_scan",
     "inclusive_sum",
     "load",
+    "load_to_shared_async",
     "local",
     "merge_sort_keys",
     "merge_sort_pairs",

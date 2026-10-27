@@ -11,6 +11,7 @@ to recognize cooperative operations without changing the public call syntax.
 from .exchange import exchange
 from .histogram import histogram as histogram
 from .load_store import load, store
+from .load_to_shared import PendingSharedCopyLike, load_to_shared_async
 from .merge_sort import merge_sort_keys as merge_sort_keys
 from .merge_sort import merge_sort_pairs as merge_sort_pairs
 from .neighbors import adjacent_difference, discontinuity
@@ -64,6 +65,7 @@ del _member_name
 
 __all__ = [
     "Hierarchy",
+    "PendingSharedCopyLike",
     "TempStorage",
     "TempStorageLike",
     "ThreadData",
@@ -79,6 +81,7 @@ __all__ = [
     "inclusive_scan",
     "inclusive_sum",
     "load",
+    "load_to_shared_async",
     "merge_sort_keys",
     "merge_sort_pairs",
     "radix_rank_keys",

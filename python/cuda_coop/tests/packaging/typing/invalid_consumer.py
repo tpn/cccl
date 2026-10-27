@@ -26,6 +26,15 @@ common.TempStorage(64, 16)  # expected-error: [call-arg]
 values = numba_coop.ThreadData(items_per_thread=2, dtype=np.int32)
 common_values = common.ThreadData(items_per_thread=2, dtype=np.int32)
 common_block = common.this_block()
+common.load_to_shared_async(  # expected-error: [call-arg]
+    common_block, object(), object(), 64
+)
+common.load_to_shared_async(
+    common.this_warp(),  # expected-error: [arg-type]
+    object(),
+    object(),
+    num_items=64,
+)
 common_block.rank_as(np.float32)  # expected-error: [arg-type]
 common_block.count_as(np.bool_)  # expected-error: [arg-type]
 common_block.rank_as(bool)  # expected-error: [arg-type]

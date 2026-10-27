@@ -56,6 +56,11 @@ def check_cutlass_surface(source: object, destination: object) -> None:
     assert_type(block, cutlass_coop.ThreadGroup[Literal["block"]])
     assert_type(values, cutlass_coop.ThreadData[np.int32])
     assert_type(values[0], np.int32)
+    pending = cutlass_coop.load_to_shared_async(
+        block, source, destination, num_items=64, offset=Int32(1)
+    )
+    assert_type(pending, cutlass_coop.PendingSharedCopyLike)
+    assert_type(pending.wait(), Any)
     assert_type(cutlass_coop.load(block, source, values), None)
     assert_type(cutlass_coop.store(block, destination, values), None)
     cutlass_coop.load(

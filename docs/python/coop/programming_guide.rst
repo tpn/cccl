@@ -24,6 +24,9 @@ For CuTe kernels, see the :doc:`CUTLASS Programming Guide <../coop_cutlass>`.
 The :doc:`Numba-CUDA-MLIR Developer Guide <developer_overview>` explains how
 this compiler integration works.
 
+The :doc:`global-to-shared copy guide <load_to_shared>` describes asynchronous
+tile staging, including buffer allocation and waiting before shared reads.
+
 .. _coop-numba-requirements:
 
 Requirements

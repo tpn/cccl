@@ -6,6 +6,25 @@
 FAQs
 ====
 
+Can Load write directly into a shared array?
+----------------------------------------------
+
+Ordinary ``coop.load`` fills a supported per-thread payload. To stage a
+whole global-memory range into shared memory, use
+``pending = coop.load_to_shared_async(block, source, shared_buffer, num_items=N)``
+and then ``shared_values = pending.wait()``. All threads in the block execute
+both calls. The returned native shared view accounts for any head padding
+inside the supplied buffer. See :doc:`load_to_shared` for allocation,
+completion, and control-flow requirements.
+
+Does a block barrier complete an asynchronous copy?
+-----------------------------------------------------
+
+Use the pending copy's ``wait()`` method to complete it before reading its
+destination. A general block barrier does not replace the transfer's
+completion operation. After the copied data have been consumed, a separate
+block barrier can be needed before another phase overwrites that buffer.
+
 .. _coop-faq-namespaces:
 .. _why-are-there-both-cuda-coop-and-cuda-coop-numba-mlir:
 

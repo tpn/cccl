@@ -14,6 +14,7 @@
 
    Overview <self>
    coop/concepts
+   coop/load_to_shared
    coop/visualizations/index
    coop/glossary
    coop/faqs

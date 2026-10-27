@@ -2,12 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from .._core.api import PendingSharedCopyLike as PendingSharedCopyLike
 from .._core.api import TempStorageLike as TempStorageLike
 from .._core.api import ThreadDataLike as ThreadDataLike
 from ._group_exchange import exchange as exchange
 from ._group_histogram import histogram as histogram
 from ._group_load_store import load as load
 from ._group_load_store import store as store
+from ._group_load_to_shared import load_to_shared_async as load_to_shared_async
 from ._group_merge_sort import merge_sort_keys as merge_sort_keys
 from ._group_merge_sort import merge_sort_pairs as merge_sort_pairs
 from ._group_neighbors import adjacent_difference as adjacent_difference

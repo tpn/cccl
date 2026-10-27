@@ -20,11 +20,12 @@ which block calls accept a TempStorage descriptor to control their temporary
 shared-memory storage.
 """
 
-from .._core.api import TempStorageLike, ThreadDataLike
+from .._core.api import PendingSharedCopyLike, TempStorageLike, ThreadDataLike
 from ._compiler._activation import register_trace_context
 from ._group_exchange import exchange
 from ._group_histogram import histogram
 from ._group_load_store import load, store
+from ._group_load_to_shared import load_to_shared_async
 from ._group_merge_sort import merge_sort_keys, merge_sort_pairs
 from ._group_neighbors import adjacent_difference, discontinuity
 from ._group_radix_sort import (
@@ -64,6 +65,7 @@ from ._thread_group import (
 
 __all__ = [
     "Hierarchy",
+    "PendingSharedCopyLike",
     "TempStorage",
     "TempStorageLike",
     "ThreadData",
@@ -79,6 +81,7 @@ __all__ = [
     "inclusive_scan",
     "inclusive_sum",
     "load",
+    "load_to_shared_async",
     "merge_sort_keys",
     "merge_sort_pairs",
     "radix_rank_keys",

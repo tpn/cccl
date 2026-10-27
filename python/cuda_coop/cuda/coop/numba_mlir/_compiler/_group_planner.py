@@ -2614,8 +2614,13 @@ class _GroupCallPlanner:
 
         self._reject_literal_unroll_constructors()
         self._mark_descriptor_calls()
+        from ._group_load_to_shared import plan_shared_copies
+
+        plan_shared_copies(self)
         for block in self.func_ir.blocks.values():
             for inst in block.body:
+                if inst in self.replacements:
+                    continue
                 if not isinstance(inst, ir.Assign):
                     continue
                 call = inst.value
