@@ -31,9 +31,8 @@ def test_radix_sort_example(items_per_thread):
         items_per_thread: cutlass.Constexpr,
     ):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         indices = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys)
         for item in cutlass.range_constexpr(items_per_thread):
             indices[item] = cutlass.Int32(
                 block.rank() * items_per_thread + item

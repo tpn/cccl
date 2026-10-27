@@ -39,10 +39,8 @@ def test_common_run_length_window_example():
     @cuda.jit
     def decode_window(values, lengths, output, items_per_thread):
         block = coop.this_block()
-        runs = coop.ThreadData(items_per_thread)
-        sizes = coop.ThreadData(items_per_thread)
-        coop.load(block, values, runs)
-        coop.load(block, lengths, sizes)
+        runs = coop.load(block, values, items_per_thread=items_per_thread)
+        sizes = coop.load(block, lengths, items_per_thread=items_per_thread)
         decoded = coop.run_length_decode(
             block,
             runs,
@@ -80,10 +78,8 @@ def test_run_length_window_example():
         values, lengths, output, offsets, totals, items_per_thread
     ):
         block = coop.this_block()
-        runs = coop.ThreadData(items_per_thread)
-        sizes = coop.ThreadData(items_per_thread)
-        coop.load(block, values, runs)
-        coop.load(block, lengths, sizes)
+        runs = coop.load(block, values, items_per_thread=items_per_thread)
+        sizes = coop.load(block, lengths, items_per_thread=items_per_thread)
         relative = coop.ThreadData(items_per_thread=4)
         total = coop.ThreadData(items_per_thread=1)
         decoded = coop.run_length_decode(
@@ -132,10 +128,8 @@ def test_run_length_bulk_example():
     @cuda.jit
     def decode_all(values, lengths, output, totals, items_per_thread):
         block = coop.this_block()
-        runs = coop.ThreadData(items_per_thread)
-        sizes = coop.ThreadData(items_per_thread)
-        coop.load(block, values, runs)
-        coop.load(block, lengths, sizes)
+        runs = coop.load(block, values, items_per_thread=items_per_thread)
+        sizes = coop.load(block, lengths, items_per_thread=items_per_thread)
         # CUB prepares the run table once for all internal windows.
         total = coop.run_length_decode_into(
             block,
@@ -178,10 +172,8 @@ def test_qualified_run_length_bulk_example():
     @cuda.jit
     def decode_all(values, lengths, output, relative, totals, items_per_thread):
         block = coop.this_block()
-        runs = coop.ThreadData(items_per_thread)
-        sizes = coop.ThreadData(items_per_thread)
-        coop.load(block, values, runs)
-        coop.load(block, lengths, sizes)
+        runs = coop.load(block, values, items_per_thread=items_per_thread)
+        sizes = coop.load(block, lengths, items_per_thread=items_per_thread)
         # CUB prepares the run table once for all internal windows.
         total = coop.run_length_decode_into(
             block,

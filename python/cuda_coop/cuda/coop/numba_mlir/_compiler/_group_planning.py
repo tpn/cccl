@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 import numba_cuda_mlir.numba_cuda.types as _numba_types
 from numba_cuda_mlir import cuda as _cuda_module
 from numba_cuda_mlir.cuda.local import array as _cuda_local_array
+from numba_cuda_mlir.cuda.shared import array as _cuda_shared_array
 
 import cuda.coop._core.api as _common_api
 from cuda.coop._core import (
@@ -962,10 +963,12 @@ class GroupPlanningContext:
         own element type. Array indexing uses the source's element type.
 
         ThreadData constructors use an explicit dtype or a dtype recorded by a
-        producer. An unrelated call stays unknown unless the scalar-cast
-        helper recognizes it. This limited analysis supplies provider
-        selection before ordinary Numba typing; it does not execute kernel
-        expressions.
+        producer. Native local/shared arrays and ``TempStorage.reserve``
+        supply their declared element dtype; this does not make shared arrays
+        per-thread payloads. An unrelated call stays unknown unless the
+        scalar-cast helper recognizes it. This limited analysis supplies
+        provider selection before ordinary Numba typing; it does not execute
+        kernel expressions.
 
         ``dtype`` calls this for each recorded source of its variable.
         ``definition`` is that assignment source; ``seen`` contains variable
@@ -1029,23 +1032,35 @@ class GroupPlanningContext:
         if definition.op != "call":
             return None
         function = self._callable(definition.func)
+        callee = self._definition(definition.func)
+        if function in {_cuda_local_array, _cuda_shared_array} or (
+            isinstance(callee, ir.Expr)
+            and callee.op == "getattr"
+            and callee.attr == "reserve"
+            and self.temp_storage(callee.value) is not None
+        ):
+            dtype_ref = (
+                definition.args[1]
+                if len(definition.args) >= 2
+                else dict(definition.kws).get("dtype")
+            )
+            resolved, dtype = self.try_constant(dtype_ref)
+            if resolved and dtype is not None:
+                return normalize_dtype_param(dtype)
+            dtype_definition = self._definition(dtype_ref)
+            if (
+                isinstance(dtype_definition, ir.Expr)
+                and dtype_definition.op == "getattr"
+                and dtype_definition.attr == "dtype"
+            ):
+                return self.dtype(dtype_definition.value, seen=seen)
+            return None
         if function in {ThreadData, _common_api.ThreadData}:
             bound = self.bind(function, definition)
             resolved, dtype = self.try_constant(bound.arguments["dtype"])
             if resolved and dtype is not None:
                 return normalize_dtype_param(dtype)
             return self.__thread_data_dtypes.get(id(definition))
-        if function is _cuda_local_array:
-            if len(definition.args) >= 2:
-                resolved, dtype = self.try_constant(definition.args[1])
-                if resolved:
-                    return normalize_dtype_param(dtype)
-            dtype_ref = dict(definition.kws).get("dtype")
-            if dtype_ref is not None:
-                resolved, dtype = self.try_constant(dtype_ref)
-                if resolved:
-                    return normalize_dtype_param(dtype)
-            return None
         if function is _typed_group_payload_like and definition.args:
             if (
                 len(definition.args) >= 3

@@ -71,6 +71,11 @@ Not every primitive supports every available group.
 Payloads and temporary storage
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+``load(..., items_per_thread=N)`` returns a per-thread ``ThreadData`` payload.
+Construct ``ThreadData`` directly for computed values, explicit alignment,
+or an existing output. Thread-group descriptors describe the participating
+threads.
+
 .. autofunction:: ThreadData
 
 .. autoclass:: ThreadDataLike
@@ -85,6 +90,14 @@ Payloads and temporary storage
 
 Memory operations
 ^^^^^^^^^^^^^^^^^
+
+Prefer ``values = load(group, source, items_per_thread=N)`` for fresh
+per-thread values. ``load(group, source, output)`` fills an existing
+per-thread payload and returns ``None``. To fill a shared array directly,
+use ``load(group, source, shared, items_per_thread=N)``. This also returns
+``None``; physical block thread ``r`` writes ``shared[r*N:(r+1)*N]``.
+Global and shared arrays can be Load sources or Store destinations.
+See :ref:`memory directions and staging <coop-shared-load-store>`.
 
 .. autofunction:: load
 .. autofunction:: store
@@ -196,6 +209,10 @@ their compiler implementation.
 Qualified calls also accept fixed-size, one-dimensional local arrays where
 the operation accepts per-thread payloads. ``local`` and ``shared`` expose
 Numba-CUDA-MLIR's memory namespaces.
+For Load, such a local array is an existing per-thread output. Shared arrays
+instead serve as Load sources and Store destinations in both the common
+and qualified APIs. Prefer returning Load unless existing per-thread storage
+must be filled; see :ref:`choosing a Load form <coop-faq-load-forms>`.
 
 .. currentmodule:: cuda.coop.numba_mlir
 
@@ -293,10 +310,11 @@ and the extensions documented below:
    import cuda.coop.cutlass as cutlass_coop
 
 Group construction, synchronization, Load/Store, and temporary storage follow
-the :ref:`Common API <coop-common-api>`. Load fills a ``ThreadData``; Store
-writes a ``ThreadData`` or one scalar per thread. Use the qualified conversion
-methods below to build a payload from a CuTe register tensor before Store,
-or to get a register tensor after Load.
+the :ref:`Common API <coop-common-api>`. Load returns a ``ThreadData`` when
+given ``items_per_thread``, or fills an existing output. Store writes a
+``ThreadData`` or one scalar per thread. Use the qualified conversion methods
+below to build a payload from a CuTe register tensor before Store, or to get
+a register tensor after Load.
 
 Qualified Reduce and Sum accept register tensors and ``TensorSSA`` values
 directly. Inside the kernel they return CuTe scalars, even when a NumPy dtype

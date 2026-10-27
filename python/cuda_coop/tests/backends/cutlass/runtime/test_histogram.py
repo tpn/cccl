@@ -341,8 +341,7 @@ def test_documented_histogram(items_per_thread):
         items_per_thread: cutlass.Constexpr,
     ):
         block = coop.this_block()
-        samples = coop.ThreadData(items_per_thread)
-        coop.load(block, source, samples)
+        samples = coop.load(block, source, items_per_thread=items_per_thread)
         counts = coop.histogram(
             block, samples, bins=65, bins_per_thread=2, counter_dtype=np.int64
         )

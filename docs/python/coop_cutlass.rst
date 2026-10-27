@@ -13,8 +13,9 @@ Use ``cuda.coop`` inside a CuTe kernel to move data, reduce or scan values,
 rearrange payloads, sort or select keys, compare neighbors, count samples,
 and decode runs. The CUTLASS backend implements these operations with CUB. The :doc:`API reference <coop_api>` lists common and qualified calls.
 
-Each thread keeps its items in a ``ThreadData`` object. ``load`` fills that
-object and returns ``None``; ``store`` writes its items to memory. The examples
+Each thread keeps its items in a ``ThreadData`` object.
+``load(group, source, items_per_thread=N)`` returns that payload;
+``store`` writes its items to memory. The examples
 below show the same kernel using the common API and the CUTLASS-qualified API.
 
 The :doc:`overview <coop>` introduces ``cuda.coop`` and installation.
@@ -58,7 +59,7 @@ qualified imports perform that registration directly.
      - Common ``cuda.coop``
      - Qualified ``cuda.coop.cutlass``
    * - Payloads
-     - Fixed per-thread ``ThreadData``; Load fills it in place.
+     - Fixed per-thread ``ThreadData`` returned by Load or constructed directly.
      - Adds CuTe register-tensor and vector conversions, described in
        :ref:`coop-cutlass-register-payloads`.
    * - Operator selection
@@ -191,7 +192,7 @@ After registration, call the primitives inside ``@cute.kernel`` or a
 
 This example computes exclusive prefix sums across a block: each output is
 seven plus the sum of all preceding input values. For input
-``[0, 1, 2, 3, ...]``, it produces ``[7, 7, 8, 10, ...]``. Load fills the
+``[0, 1, 2, 3, ...]``, it produces ``[7, 7, 8, 10, ...]``. Load returns the
 per-thread payload, Scan returns a new payload, and Store writes the result.
 All three operations reuse one ``TempStorage`` with automatic synchronization.
 
@@ -230,14 +231,17 @@ layout tag. See the :doc:`Load <coop/visualizations/load>` and
 :doc:`Exchange <coop/visualizations/exchange>` visualizations for the mappings.
 
 Pass the item count as ``items_per_thread: cutlass.Constexpr`` on the
-``@cute.kernel`` and its ``@cute.jit`` launcher, and construct the payload
-with ``coop.ThreadData(items_per_thread)``. Forward the host value through
-the launcher to the kernel. CuTe specializes the count during compilation;
+``@cute.kernel`` and its ``@cute.jit`` launcher, then load values with
+``coop.load(group, source, items_per_thread=items_per_thread)``.
+Forward the host value through the launcher to the kernel. CuTe specializes
+the count during compilation;
 it remains fixed while the kernel executes. Use
 ``cutlass.range_constexpr(items_per_thread)`` when indexing each slot.
 
-Leave the constructor's element type unspecified for normal use. Load
-infers it from the memory operand; consuming primitives can infer it from
+Load infers the payload's element type from the memory operand. For generated
+values and writable auxiliary outputs, construct
+``coop.ThreadData(items_per_thread)`` directly. Leave its element type
+unspecified for normal use; consuming primitives can infer it from
 homogeneous initialized values. Use typed scalar assignments, such as
 ``cutlass.Int32(expression)``, when the computation needs a specific numeric
 representation. Supported payload types are signed and unsigned integers of
@@ -252,21 +256,102 @@ with ``cutlass.Int32(value)``. Integer sums can overflow, and a parallel
 floating-point sum can differ from a sequential CPU sum because the order
 of additions differs.
 
-Load initializes the destination payload in place and returns ``None``.
-Store also returns ``None``. Transpose Store algorithms may rearrange the
-input payload; copy values before Store if they are needed later. For payload
+Prefer returning Load with ``items_per_thread`` for ordinary data movement.
+It returns a fresh payload. To fill an existing payload, use
+``coop.load(group, source, output)``; that form returns
+``None`` and updates the existing ``ThreadData`` in the current tracing region.
+CuTe reconstructs payload values across runtime control flow; an alias bound
+before a runtime loop does not become a mutable storage reference to the
+loop's payload. Both typed and dtype-free constructors remain supported.
+Store returns ``None``. Transpose Store
+algorithms may rearrange the input payload; copy values before Store if they
+are needed later. For payload
 inputs, Scan, Exchange, sorting, selection, and array Shuffle return fresh
 payloads. Supported scalar forms return CuTe scalars. Reduce returns one
 scalar even when each thread contributes multiple items. Read results
 only at the positions or threads where the primitive defines them.
 
 Index payloads with compile-time integers and initialize each item before
-reading it. ``ThreadData(items_per_thread, alignment=16)`` requests at
-least 16-byte alignment when storage is materialized. Input and output memory
-alignment is separate. The compiler decides which values remain in registers
+reading it. ``coop.load(group, source, items_per_thread=N, alignment=16)``
+requests at least 16-byte alignment when the returned payload's storage is
+materialized. Its alignment follows ``ThreadData(N, alignment=16)``: a positive
+compile-time power of two, preserved across payload reconstruction and register
+exports. For an existing output, set the alignment on ``ThreadData`` and omit
+``alignment`` from Load (or pass ``None``). Load cannot change that output's
+storage policy. Input and output memory alignment is separate; the kwarg makes
+no promise about the source pointer, including a pointer with an element offset.
+The compiler decides which values remain in registers
 and which spill to local memory. The :ref:`qualified conversion methods
 <coop-cutlass-register-payloads>` connect payloads to CuTe register tensors
 and immutable register values.
+
+In this backend, ``ThreadData`` holds typed scalar expressions. Both ThreadData
+Load forms allocate a temporary CuTe register tensor for the provider's result and
+replace the payload's scalar expressions. Passing an existing ``ThreadData``
+does not select an existing native register allocation. To write a native
+register tensor, use ``tensor.store(values.to_tensor_ssa())`` with matching
+shape and item order. The tensor retains its native storage and aliases.
+``values.to_register_tensor()`` instead creates a new register tensor.
+
+Shared-memory staging
+~~~~~~~~~~~~~~~~~~~~~
+
+Load accepts compact global- or shared-memory sources, including native CuTe
+shared tensors and typed tensors from ``TempStorage.reserve``. Store accepts
+the corresponding memory destinations. The return form infers its dtype
+from a shared tensor just as it does from a global-memory source.
+
+To load directly into shared memory, call
+``coop.load(group, source, shared, items_per_thread=N)``. ``shared`` is a
+contiguous one-dimensional native shared tensor with the source dtype and
+space for at least ``block_threads * N`` elements. Each physical block thread
+writes its own consecutive row of ``N`` elements. This applies to block,
+physical warp, and logical warp groups; their existing source tile origins
+remain unchanged. A native shared view selects the destination origin, while
+``offset`` applies only to the source. The call returns ``None``.
+All participating threads must use the same destination view.
+
+The provider binds CUB's output array reference directly to each shared row.
+This is a synchronous Load: it needs neither async-copy padding nor a
+16-byte buffer alignment. ``alignment`` remains a returning-payload option
+and must be omitted for shared output. Call ``block.sync()`` before another
+block thread reads the shared results. If consumers stay within the issuing
+warp group, its group barrier is sufficient.
+
+DIRECT and TRANSPOSE leave each group's tile in blocked order, so the shared
+rows concatenate to a flat copy. STRIPED preserves CUB's striped ownership:
+thread ``t`` in a group reads source positions ``t + i * group_size`` into
+its row, producing a permutation when rows are concatenated. ``valid_items``
+and ``oob_default`` retain their ordinary Load meaning. Without a default,
+items beyond the valid prefix are unspecified and must not be read.
+
+The shared output must not overlap the source range or primitive scratch.
+A detected output/scratch overlap triggers a device trap and leaves the CUDA
+context unusable.
+For a reserved output and explicit scratch in one workspace, use
+``TempStorage(sharing="exclusive")``. Separate descriptors also provide
+disjoint storage. A shared descriptor's overlapping reservations cannot
+serve as both the output and transpose scratch. This example uses exclusive
+storage, then synchronizes before reading another thread's row:
+
+.. literalinclude:: ../../python/cuda_coop/tests/backends/cutlass/runtime/test_shared_load_output.py
+   :language: python
+   :start-after: # shared-destination-cutlass-example-begin
+   :end-before: # shared-destination-cutlass-example-end
+   :dedent: 4
+
+Load into ThreadData followed by Store is also supported. This example
+stages a tile in either a native allocation or a reserved
+workspace. A striped reload changes which thread owns each item, and the
+block barrier makes the preceding writes visible. Both calls use algorithms
+without cooperative scratch. The final section also demonstrates the
+existing-output Load form and a native register destination:
+
+.. literalinclude:: ../../python/cuda_coop/tests/backends/cutlass/runtime/test_shared_load_store.py
+   :language: python
+   :start-after: docs: start cutlass-shared-load-store
+   :end-before: docs: end cutlass-shared-load-store
+   :dedent: 4
 
 .. _coop-cutlass-dtype-inference:
 
@@ -348,8 +433,10 @@ alignment permit them, with direct accesses as a fallback.
 
 Direct, striped, and vectorized Load/Store use no shared scratch and need no
 scratch-reuse barrier, even when passed a ``TempStorage`` descriptor.
-``ThreadData(items_per_thread, alignment=...)`` requests a minimum payload
-alignment; it does not change the logical item layout.
+Returning Load's ``alignment=...`` and
+``ThreadData(items_per_thread, alignment=...)`` request a minimum payload
+alignment; neither changes the logical item layout or guarantees vectorized
+memory accesses.
 
 .. _coop-cutlass-storage:
 
@@ -416,6 +503,12 @@ operations, then synchronize participating threads as required. In particular,
 load inputs into registers and synchronize before invoking a cooperative
 primitive whose scratch aliases those inputs. A block barrier does not replace
 a library's asynchronous completion or release operation.
+
+A reserved tensor with a supported Load/Store dtype can also serve as the
+shared source or Store destination in the staging example above. Keep live
+staging data separate from scratch that an operation may overwrite. Direct
+and striped Load/Store need no cooperative scratch; a transpose operation
+requires separate scratch while it reads or writes that live staging tensor.
 
 The following example passes a reserved tensor to native CuTe code, reuses its
 bytes for a cooperative reduction, and checks that a separate native shared

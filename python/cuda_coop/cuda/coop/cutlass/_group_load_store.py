@@ -18,6 +18,10 @@ from numbers import Integral, Real
 from typing import Any
 
 from cuda.coop._core import ArgumentBinding, GroupLoadStoreAlgorithm
+from cuda.coop._core.api._dispatch import (
+    _common_root_operation_name,
+    _common_root_operation_scope,
+)
 from cuda.coop._core.api._payload import _validate_common_temp_storage
 from cuda.coop._core.thread_group import ThreadGroup as CommonThreadGroup
 from cuda.coop._typing import (
@@ -28,6 +32,7 @@ from cuda.coop._typing import (
     ThreadDataLike,
     ValidItems,
     WarpLoadStoreAlgorithm,
+    WritableArrayLike,
     _CommonNumericT,
 )
 
@@ -87,21 +92,52 @@ def _resolve_group(group, algorithm, temp_storage, operation):
 def load(
     group: BlockGroup | WarpGroup,
     source: object,
-    output: ThreadDataLike[_CommonNumericT],
+    output: ThreadDataLike[_CommonNumericT] | WritableArrayLike | None = None,
     /,
     *,
+    items_per_thread: int | None = None,
+    alignment: int | None = None,
     algorithm: BlockLoadStoreAlgorithm | WarpLoadStoreAlgorithm = "direct",
     valid_items: ValidItems | None = None,
     oob_default: _CommonNumericT | float | None = None,
     offset: IntegerValue | None = None,
     temp_storage: TempStorageLike | None = None,
-) -> None:
-    """Load a contiguous group tile into a writable per-thread payload.
+) -> ThreadData | None:
+    """Load a contiguous group tile into per-thread values.
 
     Shared parameters and participation follow :func:`cuda.coop.load`. This
-    implementation accepts blocks and physical or logical warps. The output
-    must be CUTLASS ThreadData; its dtype is inferred from the source, or must
-    agree with it when already declared.
+    implementation accepts blocks and physical or logical warps. Supply a
+    positive compile-time ``items_per_thread`` to return fresh CUTLASS
+    ThreadData with the source dtype; this is the preferred form.
+    Alternatively, supply a CUTLASS ThreadData ``output`` to fill it in place
+    and return ``None``. Its dtype is inferred from the source, or must agree
+    with it when already declared.
+    Supply ``items_per_thread`` without ``output`` to return a payload, or
+    supply ThreadData without ``items_per_thread`` to fill that payload.
+
+    To load directly into shared memory, supply a native CuTe shared tensor
+    as ``output`` together with ``items_per_thread``. The tensor must be
+    contiguous, one-dimensional, have the source dtype, and contain at least
+    ``block_threads * items_per_thread`` elements. Each physical block thread
+    writes its own consecutive row, starting at
+    ``linear_thread_rank * items_per_thread``. A native view selects the
+    destination origin; ``offset`` still applies only to the source.
+    All participating threads must use the same destination view.
+    This form returns ``None``. Call ``block.sync()`` before another thread
+    reads these rows. No asynchronous operation or extra padding is involved.
+
+    With ``items_per_thread``, ``alignment`` requests a minimum power-of-two
+    byte alignment for the returned payload's materialized storage, as in
+    ``ThreadData``. An existing ``output`` retains its own alignment and
+    requires ``alignment=None``. This option does not describe the source
+    memory's alignment or change the selected item layout.
+
+    To update an existing native CuTe register
+    tensor, load a payload and call
+    ``tensor.store(payload.to_tensor_ssa())`` with compatible shape and item
+    order. The ThreadData forms materialize a temporary register tensor and
+    place its scalar values in ThreadData. The shared-output form binds CUB's
+    output array directly to each thread's shared row.
 
     Load populates the payload in the selected algorithm's layout. Beyond
     ``valid_items``, slots have unspecified values unless ``oob_default`` is
@@ -125,8 +161,13 @@ def load(
     The source must expose a raw pointer and a provably compact layout. A bare
     pointer object with no shape or stride metadata is also accepted, but its
     capacity is not checked. Register or local-memory tensors are rejected.
-    Load reads addressable memory, such as global or shared memory. DIRECT,
-    STRIPED, and VECTORIZE need no shared scratch or reuse barrier; an
+    Load reads addressable memory, such as global or shared memory. Shared
+    tensors from ``SmemAllocator`` and ``TempStorage.reserve`` are supported
+    when their dtype and compact layout meet these requirements. Synchronize
+    the participating threads after shared-memory writes and before Load
+    reads values produced by other threads. DIRECT, STRIPED, and VECTORIZE
+    need no shared scratch or
+    reuse barrier; an
     accepted block descriptor does not change that.
 
     Transpose algorithms use shared scratch. With no ``temp_storage``, the
@@ -136,6 +177,16 @@ def load(
     ``auto_sync=False`` requires a barrier before reuse. Each physical or
     logical warp uses an independent scratch slice and a reuse barrier that
     covers only its own lanes.
+
+    Shared output must not overlap the source range or primitive scratch.
+    A detected output/scratch overlap triggers a device trap and leaves the
+    CUDA context unusable.
+    Separate descriptors or ``TempStorage(sharing="exclusive")`` keep
+    reservations and explicit scratch in disjoint storage. DIRECT and
+    TRANSPOSE produce blocked rows, giving a flat copy of each source tile.
+    STRIPED preserves CUB's striped ownership, so concatenating the rows
+    permutes the tile. A scratch reuse barrier does not replace the caller's
+    synchronization before cross-thread consumption.
 
     Examples
     --------
@@ -151,8 +202,38 @@ def load(
         :dedent: 4
     """
 
-    if not isinstance(output, ThreadData):
+    returns_output = output is None
+    shared_output = not returns_output and items_per_thread is not None
+    if returns_output:
+        if items_per_thread is None:
+            raise TypeError(
+                f"{_SCOPE}.load requires output or items_per_thread"
+            )
+        if _common_root_operation_name() == "load":
+            with _common_root_operation_scope("ThreadData"):
+                output = ThreadData(items_per_thread, alignment=alignment)
+        else:
+            output = ThreadData(items_per_thread, alignment=alignment)
+    elif shared_output and isinstance(output, ThreadData):
+        raise TypeError(
+            f"{_SCOPE}.load accepts ThreadData output or items_per_thread, "
+            "not both"
+        )
+    if shared_output:
+        if isinstance(items_per_thread, bool) or not isinstance(
+            items_per_thread, Integral
+        ):
+            raise TypeError(
+                f"{_SCOPE}.load items_per_thread must be a compile-time integer"
+            )
+        if items_per_thread <= 0:
+            raise ValueError(f"{_SCOPE}.load items_per_thread must be positive")
+    elif not isinstance(output, ThreadData):
         raise TypeError(f"{_SCOPE}.load output must be ThreadData")
+    if not returns_output and alignment is not None:
+        raise TypeError(
+            f"{_SCOPE}.load alignment requires items_per_thread and no output"
+        )
     if oob_default is not None and valid_items is None:
         raise ValueError(f"{_SCOPE}.load oob_default requires valid_items")
     group, launch, algorithm = _resolve_group(
@@ -175,7 +256,9 @@ def load(
         offset=offset,
         offset_binding=_classify_integer_binding(offset, name="offset"),
         temp_storage=temp_storage,
+        items_per_thread=items_per_thread if shared_output else None,
     )
+    return output if returns_output else None
 
 
 def store(

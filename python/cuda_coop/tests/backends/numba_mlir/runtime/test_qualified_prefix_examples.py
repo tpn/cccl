@@ -31,8 +31,7 @@ def test_qualified_prefix_examples():
     @cuda.jit
     def prefixes(source, maxima, sums, items_per_thread):
         block = coop.this_block()
-        items = coop.ThreadData(items_per_thread)
-        coop.load(block, source, items)
+        items = coop.load(block, source, items_per_thread=items_per_thread)
         running_max = coop.scan(block, items, mode="inclusive", scan_op="max")
         running_sum = coop.inclusive_sum(block, items)
         coop.store(block, maxima, running_max)

@@ -185,8 +185,9 @@ def test_group_queries_share_provider_compilation(
         queries[6, index] = lanes.rank()
         queries[7, index] = lanes.count()
         if with_primitives:
-            values = coop.ThreadData(items_per_thread=4)
-            coop.load(block, source, values, algorithm="transpose")
+            values = coop.load(
+                block, source, items_per_thread=4, algorithm="transpose"
+            )
             coop.store(block, output, values, algorithm="transpose")
 
     result = kernel._compile_launch_config_signature(

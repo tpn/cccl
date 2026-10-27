@@ -412,16 +412,19 @@ Constructing a group or a ``ThreadData`` object does not synchronize threads.
 ``ThreadData``: the part of a tile owned by one thread
 ------------------------------------------------------
 
-``coop.ThreadData(items_per_thread)`` gives each thread that many slots.
-With 128 threads, the group owns ``128 * items_per_thread`` values. Each
-thread indexes only its own slots with ``items[i]``. To move values between
-threads, use an operation such as Exchange, Shuffle, or Scan.
+``items = coop.load(group, source, items_per_thread=items_per_thread)``
+returns a ``ThreadData`` payload with that many slots per thread and the
+source's element type. With 128 threads, the group owns
+``128 * items_per_thread`` values. Each thread indexes only its own slots
+with ``items[i]``. To move values between threads, use an operation such as
+Exchange, Shuffle, or Scan.
 
 :class:`~cuda.coop.ThreadDataLike` names the common payload interface used
 in API signatures. It describes the item count, dtype, and indexed reads and
-writes. Use :func:`~cuda.coop.ThreadData` to construct a payload for the
-active compiler backend. Other payload representations require support from
-that backend.
+writes. Direct :func:`~cuda.coop.ThreadData` construction remains useful for
+computed values and caller-supplied outputs. It creates
+a payload for the active compiler backend. Other payload representations
+require support from that backend.
 
 The item count must be a positive compile-time integer. Pass
 ``items_per_thread`` as a kernel argument; the compiler specializes the
@@ -438,6 +441,21 @@ not fill it with zeros. A full Load initializes the entire payload; a
 partial Load leaves out-of-bounds slots unspecified unless ``oob_default`` is
 provided. Initialize those slots after the Load or supply ``oob_default``
 before reading them.
+
+With Numba-CUDA-MLIR, each ``ThreadData`` construction site has one local
+allocation. A returning Load uses the same allocation rule. Repeated
+execution inside a loop reuses that site's storage. Consume a returned
+result before the same call executes again; the compiler checks returning
+Loads for aliases that may read overwritten storage. Direct constructors
+retain their existing allocation behavior without this additional check.
+Reassigning the result and reading the final result after the loop are
+supported.
+
+For a sliding window that needs both the previous and current tiles,
+construct two ``ThreadData`` payloads outside the loop and load into them
+with the output form. Numba-CUDA-MLIR supports swapping these payloads by
+assignment each iteration. Backends with stricter payload-identity rules
+can instead copy the current tile's elements into the previous payload.
 
 .. _coop-data-layouts:
 
@@ -503,9 +521,19 @@ Inference follows the backend's supported producers and assignments.
 Conflicting type requirements are errors. See :ref:`element-type inference
 <coop-faq-thread-data-dtype>` for cases that need additional information.
 
-Load writes into the payload supplied by the caller. Transpose Store
-algorithms may rearrange their input payload in place, as in CUB. Copy values
-before Store if they are needed later. Both operations return ``None``.
+Prefer returning Load for fresh per-thread values. Supply either a positive
+compile-time ``items_per_thread`` count or an existing per-thread output
+payload. The count form returns a new payload, including for
+one item. Pass the count by keyword: ``coop.load(group, source, 4)`` is invalid
+because the third positional argument denotes a writable destination.
+``coop.load(group, source, items)`` writes into the supplied payload
+and returns ``None``; omit ``items_per_thread`` and leave ``alignment=None``
+in that form. Its dtype-free constructor and backward inference remain
+supported. To fill a shared array, supply both the destination and count,
+as described in :ref:`shared-memory staging <coop-shared-load-store>`.
+
+Transpose Store algorithms may rearrange their input payload in place, as in
+CUB. Copy values before Store if they are needed later. Store returns ``None``.
 Exchange, Merge Sort, TopK, Adjacent Difference, Discontinuity, Histogram,
 windowed Run Length Decode, Batched Reduction, and the array forms of Scan,
 Shuffle, Radix Sort, and Radix Rank return fresh payloads, so their input
@@ -524,11 +552,14 @@ address-taking, and register pressure influence the final placement.
 Increasing the item count increases the amount of live data per thread.
 
 The optional ``alignment`` keyword requests a minimum power-of-two alignment
-in bytes when the compiler materializes the payload. For example,
-``coop.ThreadData(items_per_thread, alignment=16)`` requests at least
-16-byte alignment. The compiler may strengthen it. This setting applies
-to payload storage; alignment of the input and output arrays remains a
-separate property.
+in bytes when the compiler materializes the payload. Both
+``coop.load(group, source, items_per_thread=items_per_thread, alignment=16)``
+and ``coop.ThreadData(items_per_thread, alignment=16)`` request at least
+16-byte alignment. The compiler may strengthen it. Load accepts a non-``None``
+alignment only when it creates the payload; an existing destination keeps
+the alignment selected at its construction. This setting applies to payload
+storage. Source and destination array alignment, and ``TempStorage`` scratch
+alignment, are separate properties.
 
 Load, operate, store
 --------------------
@@ -537,6 +568,109 @@ Load and Store accept one-dimensional contiguous arrays. ``offset`` counts
 elements from the array's beginning. ``valid_items`` counts elements in
 the valid prefix of the selected group's tile. Both must be uniform within
 that group.
+
+.. _coop-shared-load-store:
+
+Global memory, shared memory, and per-thread values
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Load's source and Store's destination may be in global or shared memory.
+Returning Load produces per-thread values. An existing destination can be a
+per-thread payload or a shared array partitioned into per-thread rows:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Call
+     - Memory direction
+     - Result
+   * - ``values = coop.load(group, source, items_per_thread=N)``
+     - Global or shared memory to per-thread values
+     - A new ``ThreadData`` payload; preferred for fresh values
+   * - ``coop.load(group, source, output)``
+     - Global or shared memory to existing per-thread storage
+     - Updates ``output`` and returns ``None``
+   * - ``coop.load(group, source, shared, items_per_thread=N)``
+     - Global or shared memory to disjoint rows of shared memory
+     - Updates ``shared`` and returns ``None``; synchronize before consumption
+   * - ``coop.store(group, destination, values)``
+     - Per-thread values to global or shared memory
+     - Writes ``destination`` and returns ``None``
+
+The common API accepts ``ThreadData`` outputs. Numba-qualified Load also
+accepts supported fixed-size, one-dimensional ``cuda.local.array`` outputs;
+see :ref:`the local-array example <coop-programming-api-choice>`. A local
+array belongs to one thread and may be promoted to registers by the compiler.
+For a ``cuda.shared.array`` destination, supply ``items_per_thread=N`` as
+well. The explicit count partitions the block-wide array into disjoint rows;
+physical linear block thread ``r`` writes ``shared[r*N:(r+1)*N]``. This also
+applies to warp and logical-warp groups: pass a destination covering all
+threads in the enclosing block, so sibling groups write disjoint rows.
+
+The destination must be one-dimensional and contiguous, have the source's
+dtype, and have a compile-time extent of at least ``block_threads * N``.
+Use the same destination view across participating threads. A supported
+contiguous slice can select its origin. In Numba-CUDA-MLIR, use
+``shared[start:stop]`` and omit an explicit slice step, including one. Load's
+``offset`` changes only source addressing. A non-``None`` ``alignment`` is
+reserved for returning Load; an existing array keeps its allocation's
+alignment. Keep live source, output and primitive scratch regions disjoint.
+
+With blocked algorithms, the rows flatten in source order. With ``striped``,
+each thread retains its striped source elements; for a group of ``G`` threads,
+row ``t`` contains elements ``t, t+G, ..., t+(N-1)*G`` from that group's tile.
+Flattening these rows therefore permutes the source. ``valid_items`` still
+counts the source tile's valid prefix, and invalid output slots are
+unspecified unless ``oob_default`` is given.
+
+This example loads directly into shared memory and synchronizes before a
+consumer reads values written by other threads:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_shared_load_output.py
+   :language: python
+   :start-after: # shared-load-example-begin
+   :end-before: # shared-load-example-end
+   :dedent: 4
+
+Returning Load followed by Store remains useful when computation on the
+per-thread values belongs between the memory operations. This example stages
+a tile into shared memory and reloads it with
+striped ownership, so threads read values written by other threads. The block
+barrier makes those writes visible before the reload. ``tile_items`` is a
+host-computed constant captured by the kernel, giving ``cuda.shared.array``
+a static extent:
+
+.. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_shared_load_store_example.py
+   :language: python
+   :start-after: # shared-load-store-example-begin
+   :end-before: # shared-load-store-example-end
+   :dedent: 4
+   :prepend: items_per_thread = 4
+
+The typed shared view returned by ``TempStorage.reserve`` can also be a
+Load source, shared Load destination, or Store destination. For example,
+the shared allocation above
+can be replaced inside the kernel with:
+
+.. code-block:: python
+
+   workspace = coop.TempStorage(auto_sync=False)
+   shared = workspace.reserve(tile_items, types.int32)
+
+Reserve does not initialize the view or synchronize application accesses.
+The direct Store and striped Load in this example need no primitive scratch.
+If a shared data view and a transpose-family operation use the same backing
+region, their lifetimes must not overlap. Use independent descriptors or
+``sharing="exclusive"`` for live data and scratch, and follow the
+:ref:`reservation and reuse rules <coop-temp-storage>`.
+
+This staging sequence is synchronous Load/Store plus an explicit block
+barrier. It does not expose an asynchronous global-to-shared transfer or its
+completion token. CUTLASS uses the same memory directions with native shared
+CuTe tensors; see :ref:`its executable example <coop-cutlass-load-store>`.
+
+Tile bounds and defaults
+^^^^^^^^^^^^^^^^^^^^^^^^
 
 Runtime ``valid_items`` and ``offset`` accept signed integers through 64 bits
 and unsigned integers through 32 bits. Boolean, floating-point, and
@@ -674,14 +808,13 @@ to that payload's items are visible to the caller.
 
 Cooperative helpers must be inlined into the calling kernel before planning.
 Numba-CUDA-MLIR defaults device helpers to ``inline="always"``; the example
-spells it out on ``load_into``. ``inline="never"`` prevents this frontend
+spells it out on ``load_values``. ``inline="never"`` prevents this frontend
 inlining and is unsupported for a helper containing cooperative operations.
 Inlining during later optimization or device linking comes too late to
 supply the group and payload information this planner needs.
 
-This example uses nested helpers. ``load_tile`` creates a payload, passes it
-and the group to ``load_into``, and returns the initialized payload to the
-kernel. Load infers the element type from ``source``:
+This example uses nested helpers. ``load_tile`` calls ``load_values``, which
+returns the payload produced by Load. Its element type comes from ``source``:
 
 .. literalinclude:: ../../../python/cuda_coop/tests/backends/numba_mlir/runtime/test_device_helpers_example.py
    :language: python

@@ -38,9 +38,14 @@ def test_qualified_topk_examples():
         items_per_thread,
     ):
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
         indices = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys, valid_items=count, oob_default=0)
+        keys = coop.load(
+            block,
+            source,
+            items_per_thread=items_per_thread,
+            valid_items=count,
+            oob_default=0,
+        )
         for item in range(items_per_thread):
             indices[item] = types.int32(block.rank() * items_per_thread + item)
         low = coop.topk_min_keys(block, keys, k=8, valid_items=count)

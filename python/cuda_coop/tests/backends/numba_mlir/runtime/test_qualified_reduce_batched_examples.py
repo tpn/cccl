@@ -32,8 +32,9 @@ def test_qualified_batched_reduce_example():
     @cuda.jit
     def feature_maxima(source, destination, items_per_thread):
         warp = coop.this_warp()
-        features = coop.ThreadData(items_per_thread)
-        coop.load(coop.this_block(), source, features)
+        features = coop.load(
+            coop.this_block(), source, items_per_thread=items_per_thread
+        )
         result = coop.reduce_batched(warp, features, binary_op=maximum)
         # Each input slot is a separate batch reduced across the warp.
         if warp.rank() < items_per_thread:

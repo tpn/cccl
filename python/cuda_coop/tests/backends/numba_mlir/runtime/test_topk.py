@@ -85,11 +85,9 @@ def test_topk_preserves_inputs_and_pairs(
         items_per_thread,
     ):
         block = api.this_block()
-        keys = api.ThreadData(items_per_thread)
-        api.load(block, source, keys)
+        keys = api.load(block, source, items_per_thread=items_per_thread)
         if pairs:
-            values = api.ThreadData(items_per_thread)
-            api.load(block, payload, values)
+            values = api.load(block, payload, items_per_thread=items_per_thread)
             chosen, chosen_values = topk(
                 block, keys, values, k=k, valid_items=count
             )
@@ -171,8 +169,9 @@ def test_numeric_profile_and_partial_counts(dtype, selection, items_per_thread):
 
     @cuda.jit
     def kernel(source, destination, k, count, items_per_thread):
-        keys = coop.ThreadData(items_per_thread, dtype=dtype)
-        coop.load(coop.this_block(), source, keys)
+        keys = coop.load(
+            coop.this_block(), source, items_per_thread=items_per_thread
+        )
         chosen = topk(coop.this_block(), keys, k=k, valid_items=count)
         coop.store(
             coop.this_block(), destination, chosen, valid_items=min(k, count)
@@ -232,8 +231,7 @@ def test_static_controls_and_reused_storage(
     def kernel(source, output, items_per_thread):
         scratch = coop.TempStorage(auto_sync=auto_sync)
         block = coop.this_block()
-        keys = coop.ThreadData(items_per_thread)
-        coop.load(block, source, keys)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         chosen = coop.topk_min_keys(block, keys, k=keep, temp_storage=scratch)
         if manual_sync:
             cuda.syncthreads()
@@ -366,9 +364,8 @@ def test_empty_prefix_with_cub_assertions(monkeypatch, items_per_thread):
 
     @cuda.jit
     def kernel(source, output, k, count, items_per_thread):
-        keys = coop.ThreadData(items_per_thread)
         block = coop.this_block()
-        coop.load(block, source, keys)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         selected = coop.topk_min_keys(block, keys, k=k, valid_items=count)
         coop.store(block, output, selected, valid_items=min(k, count))
 

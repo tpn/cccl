@@ -165,8 +165,7 @@ def test_invalid_adjacent_options_rejected(options, match):
 
         @cuda.jit(chip="sm_90")
         def kernel(source):
-            values = coop.ThreadData(items_per_thread=3, dtype=types.int32)
-            coop.load(coop.this_block(), source, values)
+            values = coop.load(coop.this_block(), source, items_per_thread=3)
             return coop.adjacent_difference(
                 coop.this_block(),
                 values,
@@ -179,8 +178,7 @@ def test_invalid_adjacent_options_rejected(options, match):
 
         @cuda.jit(chip="sm_90")
         def kernel(source):
-            values = coop.ThreadData(items_per_thread=3, dtype=types.int32)
-            coop.load(coop.this_block(), source, values)
+            values = coop.load(coop.this_block(), source, items_per_thread=3)
             return coop.adjacent_difference(
                 coop.this_block(), values, valid_items=count
             )
@@ -188,8 +186,7 @@ def test_invalid_adjacent_options_rejected(options, match):
 
         @cuda.jit(chip="sm_90")
         def kernel(source):
-            values = coop.ThreadData(items_per_thread=3, dtype=types.int32)
-            coop.load(coop.this_block(), source, values)
+            values = coop.load(coop.this_block(), source, items_per_thread=3)
             return coop.adjacent_difference(
                 coop.this_block(), values, tile_predecessor_item=1.5
             )

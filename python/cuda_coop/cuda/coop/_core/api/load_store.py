@@ -12,6 +12,7 @@ representations from silently widening the common API.
 
 from __future__ import annotations
 
+from numbers import Integral
 from typing import Any
 
 from cuda.coop._typing import (
@@ -20,6 +21,7 @@ from cuda.coop._typing import (
     IntegerValue,
     ValidItems,
     WarpLoadStoreAlgorithm,
+    WritableArrayLike,
     _CommonNumericT,
 )
 
@@ -35,6 +37,7 @@ from ._payload import (
     TempStorageLike,
     ThreadDataLike,
     _common_thread_data_extent,
+    _normalize_alignment,
     _ReadableThreadDataLike,
     _validate_common_integer_value,
     _validate_common_numeric_scalar,
@@ -71,6 +74,7 @@ def _validate_common_load_store_options(
     *,
     algorithm: Any,
     payload: Any,
+    items_per_thread: int | None = None,
     valid_items: Any,
     oob_default: object = None,
     offset: Any,
@@ -108,7 +112,7 @@ def _validate_common_load_store_options(
                     "and 2147483647"
                 )
             if group.static_size is not None:
-                items_per_thread = (
+                payload_items = items_per_thread or (
                     _common_thread_data_extent(
                         operation,
                         "output" if operation == "load" else "value",
@@ -117,7 +121,7 @@ def _validate_common_load_store_options(
                     if isinstance(payload, _ReadableThreadDataLike)
                     else 1
                 )
-                tile_items = group.static_size * items_per_thread
+                tile_items = group.static_size * payload_items
                 if static_valid_items > tile_items:
                     raise ValueError(
                         f"cuda.coop.{operation} valid_items "
@@ -160,16 +164,24 @@ def _validate_common_load_store_options(
 def load(
     group: BlockGroup | WarpGroup,
     source: object,
-    output: ThreadDataLike[_CommonNumericT],
+    output: ThreadDataLike[_CommonNumericT] | WritableArrayLike | None = None,
     /,
     *,
+    items_per_thread: int | None = None,
+    alignment: int | None = None,
     algorithm: BlockLoadStoreAlgorithm | WarpLoadStoreAlgorithm = "direct",
     valid_items: ValidItems | None = None,
     oob_default: _CommonNumericT | float | None = None,
     offset: IntegerValue | None = None,
     temp_storage: TempStorageLike | None = None,
-) -> None:
-    """Load a group tile from memory into per-thread values.
+) -> ThreadDataLike[Any] | None:
+    """Load a group tile into per-thread values or a shared array.
+
+    Prefer ``values = load(group, source, items_per_thread=N)`` for a fresh
+    payload. ``load(group, source, output)`` fills an existing per-thread
+    payload. ``load(group, source, shared_output, items_per_thread=N)`` fills
+    disjoint per-thread rows of a shared array. Both output forms return
+    ``None``. Synchronize before other threads consume shared output.
 
     Parameters
     ----------
@@ -178,14 +190,40 @@ def load(
         Supports blocks and physical or logical warps. Warp loads require
         an enclosing block size divisible by 32.
     source : array
-        One-dimensional contiguous source array in device-accessible memory.
-        Its element dtype must match ``output``; an untyped ``ThreadData``
-        infers its dtype from this array. The array must contain all elements
+        One-dimensional contiguous source array in global or shared memory.
+        For shared memory, finish the producer's writes and synchronize the
+        participating threads before loading values written by other threads.
+        Its element dtype determines the returned payload's dtype, or must
+        match an existing ``output``. An untyped output infers its dtype from
+        this array. The array must contain all elements
         selected by ``offset`` and ``valid_items``.
-    output : cuda.coop.ThreadDataLike
-        Writable :ref:`per-thread payload <coop-common-payloads>`.
-        Load populates this payload in place. The group's tile contains
-        ``group_size * items_per_thread`` elements.
+    output : cuda.coop.ThreadDataLike or shared array, optional
+        Existing writable destination. For a per-thread payload, omit
+        ``items_per_thread``; Load obtains the extent from that payload.
+        For a one-dimensional contiguous shared array, supply a positive
+        compile-time ``items_per_thread=N``. The destination must have the
+        source's dtype and capacity for ``block_threads * N`` elements,
+        including for physical or logical warp groups. Physical linear block
+        thread ``r`` writes ``output[r*N:(r+1)*N]``. ``offset`` changes only
+        the source; pass a shared slice or view to select a destination origin.
+        All participating threads must use the same destination view.
+        The shared extent must be known during compilation. Keep live source,
+        output and primitive scratch regions disjoint. Synchronize before
+        threads read one another's output. Leave ``alignment=None`` for
+        either kind of existing destination.
+    items_per_thread : int, optional
+        Positive compile-time number of values loaded by each thread.
+        Required when ``output`` is omitted or is a shared array; omit it
+        for an existing per-thread payload. With no output, even a count of
+        one returns an indexed payload rather than a scalar.
+    alignment : int, optional
+        Compile-time minimum alignment in bytes for the returned payload,
+        with the same positive power-of-two rules as :func:`ThreadData`.
+        ``None`` lets the compiler choose; it may strengthen an explicit
+        request. Requires ``output`` to be omitted. For an existing
+        ``output``, choose alignment when allocating the destination instead.
+        This does not assert alignment of ``source`` or change scratch
+        alignment, which is configured through ``temp_storage``.
     algorithm : str, optional
         Compile-time load algorithm, default ``"direct"``. ``"direct"`` gives
         each thread consecutive elements (blocked order); ``"striped"`` gives
@@ -195,6 +233,9 @@ def load(
         blocked order. Both return blocked order. Blocks also support
         ``"warp_transpose"`` and ``"warp_transpose_timesliced"``, which return
         blocked order and require a block size divisible by 32.
+        These ownership rules also apply to shared outputs: blocked rows
+        preserve source order when flattened, whereas ``"striped"`` rows
+        produce a permutation of the source tile.
     valid_items : int or integer scalar, optional
         Number of valid elements in the group's tile, shared by all threads
         in that group. Supply a value between zero and the tile size,
@@ -220,8 +261,9 @@ def load(
 
     Returns
     -------
-    None
-        The call populates ``output`` in place.
+    cuda.coop.ThreadDataLike or None
+        A fresh payload when ``output`` is omitted. Otherwise,
+        populate ``output`` in place and return ``None``.
 
     See Also
     --------
@@ -248,12 +290,34 @@ def load(
 
     For CuTe pointers and register payloads, see the executable
     :ref:`CUTLASS Load and Store example <coop-cutlass-load-store>`.
+
+    For global-to-shared staging and subsequent shared-to-payload loads, see
+    :ref:`shared-memory Load and Store <coop-shared-load-store>`. A shared
+    array returned by ``TempStorage.reserve`` is a memory operand,
+    not Load's per-thread ``output`` or the primitive's scratch descriptor.
     """
 
     algorithm = _common_selector(
         "load", "algorithm", algorithm, _COMMON_LOAD_STORE_ALGORITHMS
     )
-    if _backend_module_name() is not None:
+    if output is None and items_per_thread is None:
+        raise TypeError("cuda.coop.load requires output or items_per_thread")
+    if items_per_thread is not None:
+        if isinstance(items_per_thread, bool) or not isinstance(
+            items_per_thread, Integral
+        ):
+            raise TypeError(
+                "cuda.coop.load items_per_thread must be a compile-time integer"
+            )
+        if items_per_thread <= 0:
+            raise ValueError("cuda.coop.load items_per_thread must be positive")
+    if output is None:
+        alignment = _normalize_alignment(alignment)
+    if (
+        _backend_module_name() is not None
+        and output is not None
+        and items_per_thread is None
+    ):
         _validate_common_numeric_value(
             "load",
             "output",
@@ -261,22 +325,30 @@ def load(
             allow_untyped_thread_data=True,
             require_thread_data=True,
         )
+    if output is not None and alignment is not None:
+        raise TypeError(
+            "cuda.coop.load alignment requires items_per_thread and no output; "
+            "set alignment when constructing the output instead"
+        )
     _validate_common_load_store_options(
         "load",
         group,
         algorithm=algorithm,
         payload=output,
+        items_per_thread=items_per_thread,
         valid_items=valid_items,
         oob_default=oob_default,
         offset=offset,
         temp_storage=temp_storage,
     )
 
-    _group_primitive_marker(
+    return _group_primitive_marker(
         "load",
         group,
         source,
         output,
+        items_per_thread=items_per_thread,
+        alignment=alignment,
         algorithm=algorithm,
         valid_items=valid_items,
         oob_default=oob_default,
@@ -309,9 +381,11 @@ def store(
         Supports blocks and physical or logical warps. Warp stores require
         an enclosing block size divisible by 32.
     destination : array
-        Writable one-dimensional contiguous array in device-accessible
+        Writable one-dimensional contiguous array in global or shared
         memory, with the same element dtype as ``value``. It must contain
         every element selected by ``offset`` and ``valid_items``.
+        Synchronize the participating threads before other threads read
+        the shared-memory values written by this call.
     value : numeric scalar or cuda.coop.ThreadDataLike
         This thread's value or readable :ref:`payload <coop-common-payloads>`.
         Initialize every item that will be stored. The tile contains
@@ -372,6 +446,9 @@ def store(
 
     For a CuTe kernel with partial stores and element offsets, see
     :ref:`CUTLASS Load and Store <coop-cutlass-load-store>`.
+    See :ref:`shared-memory Load and Store <coop-shared-load-store>` for
+    a complete direct shared-destination example, ownership rules, and the
+    barrier needed before other threads consume shared values.
     """
 
     algorithm = _common_selector(

@@ -55,8 +55,7 @@ def test_topk_production_compile_links_checked_provider(
     def kernel(source, destination, k, count, items_per_thread):
         block = coop.this_block()
         scratch = coop.TempStorage()
-        keys = coop.ThreadData(items_per_thread, dtype=types.float64)
-        coop.load(block, source, keys)
+        keys = coop.load(block, source, items_per_thread=items_per_thread)
         if pairs:
             values = coop.ThreadData(items_per_thread, dtype=types.int64)
             for item in range(items_per_thread):

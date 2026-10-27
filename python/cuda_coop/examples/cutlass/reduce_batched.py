@@ -43,8 +43,7 @@ def run_example(api="common", items_per_thread=3):
         items_per_thread: cutlass.Constexpr,
     ):
         warp = coop.this_warp()
-        features = coop.ThreadData(items_per_thread)
-        coop.load(warp, samples, features)
+        features = coop.load(warp, samples, items_per_thread=items_per_thread)
         sums = coop.reduce_batched(warp, features)
         outputs = cute.make_tensor(
             totals, cute.make_layout(2 * items_per_thread)

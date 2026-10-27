@@ -38,8 +38,7 @@ def test_qualified_neighbor_examples():
         source, deltas, heads_out, tails_out, items_per_thread
     ):
         block = coop.this_block()
-        items = coop.ThreadData(items_per_thread)
-        coop.load(block, source, items)
+        items = coop.load(block, source, items_per_thread=items_per_thread)
         differences = coop.adjacent_difference(
             block,
             items,

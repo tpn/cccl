@@ -2179,6 +2179,28 @@ class _ProvenanceRewrite(Rewrite):
                 if isinstance(incoming, ir.Var)
             )
         if definition.op == "call":
+            if self._is_shared_array_ctor_call(definition):
+                return self._extract_shared_array_specification(
+                    definition
+                ).dtype
+            callee = self._lookup_definition(definition.func)
+            if (
+                isinstance(callee, ir.Expr)
+                and callee.op == "getattr"
+                and callee.attr == "reserve"
+                and self._resolve_temp_storage_ctor_key(callee.value)
+                is not None
+            ):
+                dtype_ref = (
+                    definition.args[1]
+                    if len(definition.args) >= 2
+                    else dict(definition.kws).get("dtype")
+                )
+                return (
+                    self._resolve_dtype_ref(dtype_ref)
+                    if dtype_ref is not None
+                    else None
+                )
             return self._resolve_call_result_dtype(definition)
         return None
 

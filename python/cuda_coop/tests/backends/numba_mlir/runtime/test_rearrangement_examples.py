@@ -36,8 +36,12 @@ def test_exchange_example():
     @cuda.jit
     def exchange_tile(source, destination, items_per_thread):
         block = coop.this_block()
-        striped = coop.ThreadData(items_per_thread)
-        coop.load(block, source, striped, algorithm="striped")
+        striped = coop.load(
+            block,
+            source,
+            items_per_thread=items_per_thread,
+            algorithm="striped",
+        )
         blocked = coop.exchange(block, striped, mode="striped_to_blocked")
         coop.store(block, destination, blocked)
 
@@ -60,8 +64,7 @@ def test_exchange_striped_output():
     @cuda.jit
     def exchange_tile(source, destination, preserved, items_per_thread):
         block = coop.this_block()
-        blocked = coop.ThreadData(items_per_thread)
-        coop.load(block, source, blocked)
+        blocked = coop.load(block, source, items_per_thread=items_per_thread)
         striped = coop.exchange(block, blocked, mode="blocked_to_striped")
         coop.store(block, destination, striped)
         coop.store(block, preserved, blocked)
@@ -88,8 +91,7 @@ def test_shuffle_example():
     @cuda.jit
     def shift_tile(source, following, preceding, items_per_thread):
         block = coop.this_block()
-        items = coop.ThreadData(items_per_thread)
-        coop.load(block, source, items)
+        items = coop.load(block, source, items_per_thread=items_per_thread)
         down = coop.shuffle(block, items, mode="down")
         up = coop.shuffle(block, items, mode="up")
         # Define each exposed boundary before it is read by store.
