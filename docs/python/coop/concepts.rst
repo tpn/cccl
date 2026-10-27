@@ -202,19 +202,22 @@ one still returns a payload.
 Use ``coop.ThreadData(items_per_thread)`` to construct a payload for computed
 values or an explicit output. The output form,
 ``coop.load(group, source, output)``, fills that existing payload and returns
-``None``. Supply exactly one of ``output`` or ``items_per_thread``. Dtype-free
+``None``; omit ``items_per_thread`` for this per-thread output form. Dtype-free
 ``ThreadData`` construction remains supported, including Numba-CUDA-MLIR's
 backward inference from later uses such as Store. ``items_per_thread`` and
 ``alignment`` are keyword-only. The third positional argument is always an
-output payload, so ``coop.load(group, source, 4)`` is invalid.
-A non-``None`` ``alignment`` is valid only with ``items_per_thread``; set an
-existing output's alignment when constructing it instead.
+destination, so ``coop.load(group, source, 4)`` is invalid.
+A non-``None`` ``alignment`` is valid only when Load returns a new payload;
+set an existing output's alignment when allocating it instead.
 
 Global and shared arrays can supply Load's source and receive Store's output.
 Those arrays hold a group tile; a ``ThreadData`` holds one thread's values.
-To fill a shared tile, Store the returned payload into a shared array and
-synchronize before other threads consume it. See
-:ref:`shared-memory staging <coop-shared-load-store>` for a complete example.
+To fill a shared tile directly, pass both the destination and a count:
+``coop.load(group, source, shared, items_per_thread=N)``. Physical block
+thread ``r`` writes ``shared[r*N:(r+1)*N]``, including for warp groups.
+Synchronize before other threads consume it. See
+:ref:`shared-memory staging <coop-shared-load-store>` for capacity, layout,
+and synchronization rules and complete examples.
 
 Supported payload dtypes are signed and unsigned 8-, 16-, 32-, and 64-bit
 integers and 32- and 64-bit floating-point values. An explicit alignment is
@@ -228,7 +231,7 @@ payload. ``None`` lets the compiler choose; it may use stronger alignment.
 
 The payload extent is a compile-time value available as
 ``items.items_per_thread``. Directly constructed slots start uninitialized.
-Initialize every item an operation will read; either Load form without
+Initialize every item an operation will read; any Load form without
 ``oob_default`` leaves invalid slots unspecified. Assign those slots after
 Load before reading them, or supply a default. As in CUB, transpose Store
 algorithms may rearrange the input payload in place. Copy values before

@@ -120,6 +120,18 @@ ScalarShuffleMode: TypeAlias = Literal["offset", "rotate"]
 ShuffleMode: TypeAlias = CommonShuffleMode | ScalarShuffleMode
 TempStorageSharing: TypeAlias = Literal["shared", "exclusive"]
 
+class WritableArrayLike(Protocol):
+    """Describe a native array's shape and writable indexing.
+
+    This structural annotation does not establish its memory address space.
+    The selected compiler validates shared-memory provenance and layout.
+    """
+
+    @property
+    def shape(self) -> object: ...
+    def __getitem__(self, index: Any, /) -> Any: ...
+    def __setitem__(self, index: Any, value: Any, /) -> None: ...
+
 class CompilerScalarLike(Protocol):
     """Describe a compiler scalar without importing its concrete type."""
 
@@ -284,5 +296,6 @@ __all__ = [
     "ThreadLevel",
     "WarpExchangeMode",
     "WarpLoadStoreAlgorithm",
+    "WritableArrayLike",
     "_CommonNumericT",
 ]

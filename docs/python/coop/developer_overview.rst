@@ -105,9 +105,13 @@ compact inside a kernel, while named options make choices such as
 partial-tile handling and temporary storage ownership explicit. New optional
 keyword parameters can be added without changing existing calls.
 
-Load also accepts an existing output as its third positional operand. That
-form returns ``None`` and obtains its extent from the payload. Supply exactly
-one of the output operand or the keyword-only ``items_per_thread`` count.
+Load also accepts an existing output as its third positional operand. For
+an existing per-thread payload, omit ``items_per_thread``; the payload gives
+the extent. For a shared array, supply the keyword-only count to partition
+the destination into disjoint rows: physical block thread ``r`` writes
+``output[r*N:(r+1)*N]``. Both output forms return ``None``. The compiler passes
+each row directly to CUB's output array reference; no intermediate
+``ThreadData`` or separate Store call is required.
 
 In the API reference, ``/`` marks the end of the positional-only arguments
 and ``*`` introduces keyword-only parameters. For example, pass the group
