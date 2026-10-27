@@ -285,8 +285,8 @@ and which spill to local memory. The :ref:`qualified conversion methods
 <coop-cutlass-register-payloads>` connect payloads to CuTe register tensors
 and immutable register values.
 
-In this backend, ``ThreadData`` holds typed scalar expressions. Both Load
-forms allocate a temporary CuTe register tensor for the provider's result and
+In this backend, ``ThreadData`` holds typed scalar expressions. Both ThreadData
+Load forms allocate a temporary CuTe register tensor for the provider's result and
 replace the payload's scalar expressions. Passing an existing ``ThreadData``
 does not select an existing native register allocation. To write a native
 register tensor, use ``tensor.store(values.to_tensor_ssa())`` with matching
@@ -298,12 +298,48 @@ Shared-memory staging
 
 Load accepts compact global- or shared-memory sources, including native CuTe
 shared tensors and typed tensors from ``TempStorage.reserve``. Store accepts
-the corresponding memory destinations. Load's output is a per-thread payload;
-use Store to place those values in shared memory, then synchronize before
-other threads load them. The return form infers its dtype from the shared
-tensor just as it does from a global-memory source.
+the corresponding memory destinations. The return form infers its dtype
+from a shared tensor just as it does from a global-memory source.
 
-This example stages a tile in either a native allocation or a reserved
+To load directly into shared memory, call
+``coop.load(group, source, shared, items_per_thread=N)``. ``shared`` is a
+contiguous one-dimensional native shared tensor with the source dtype and
+space for at least ``block_threads * N`` elements. Each physical block thread
+writes its own consecutive row of ``N`` elements. This applies to block,
+physical warp, and logical warp groups; their existing source tile origins
+remain unchanged. A native shared view selects the destination origin, while
+``offset`` applies only to the source. The call returns ``None``.
+All participating threads must use the same destination view.
+
+The provider binds CUB's output array reference directly to each shared row.
+This is a synchronous Load: it needs neither async-copy padding nor a
+16-byte buffer alignment. ``alignment`` remains a returning-payload option
+and must be omitted for shared output. Call ``block.sync()`` before another
+block thread reads the shared results. If consumers stay within the issuing
+warp group, its group barrier is sufficient.
+
+DIRECT and TRANSPOSE leave each group's tile in blocked order, so the shared
+rows concatenate to a flat copy. STRIPED preserves CUB's striped ownership:
+thread ``t`` in a group reads source positions ``t + i * group_size`` into
+its row, producing a permutation when rows are concatenated. ``valid_items``
+and ``oob_default`` retain their ordinary Load meaning. Without a default,
+items beyond the valid prefix are unspecified and must not be read.
+
+The shared output must not overlap the source range or primitive scratch.
+For a reserved output and explicit scratch in one workspace, use
+``TempStorage(sharing="exclusive")``. Separate descriptors also provide
+disjoint storage. A shared descriptor's overlapping reservations cannot
+serve as both the output and transpose scratch. This example uses exclusive
+storage, then synchronizes before reading another thread's row:
+
+.. literalinclude:: ../../python/cuda_coop/tests/backends/cutlass/runtime/test_shared_load_output.py
+   :language: python
+   :start-after: # shared-destination-cutlass-example-begin
+   :end-before: # shared-destination-cutlass-example-end
+   :dedent: 4
+
+Load into ThreadData followed by Store is also supported. This example
+stages a tile in either a native allocation or a reserved
 workspace. A striped reload changes which thread owns each item, and the
 block barrier makes the preceding writes visible. Both calls use algorithms
 without cooperative scratch. The final section also demonstrates the

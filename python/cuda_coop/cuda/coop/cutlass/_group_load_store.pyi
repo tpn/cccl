@@ -14,6 +14,7 @@ from cuda.coop._typing import (
     ThreadDataLike,
     ValidItems,
     WarpLoadStoreAlgorithm,
+    WritableArrayLike,
 )
 
 from .._core.api.load_store import store as store
@@ -157,3 +158,71 @@ def load(
     temp_storage: None = None,
 ) -> None:
     """Load a partial warp tile and fill invalid output items."""
+
+@overload
+def load(
+    group: BlockGroup,
+    source: object,
+    output: WritableArrayLike,
+    /,
+    *,
+    items_per_thread: int,
+    alignment: None = None,
+    algorithm: BlockLoadStoreAlgorithm = "direct",
+    valid_items: ValidItems | None = None,
+    oob_default: None = None,
+    offset: IntegerValue | None = None,
+    temp_storage: TempStorageLike | None = None,
+) -> None:
+    """Load directly into disjoint per-thread rows of a shared tensor."""
+
+@overload
+def load(
+    group: BlockGroup,
+    source: object,
+    output: WritableArrayLike,
+    /,
+    *,
+    items_per_thread: int,
+    alignment: None = None,
+    algorithm: BlockLoadStoreAlgorithm = "direct",
+    valid_items: ValidItems,
+    oob_default: CommonNumericScalar | float,
+    offset: IntegerValue | None = None,
+    temp_storage: TempStorageLike | None = None,
+) -> None:
+    """Load shared rows and fill invalid items of a partial block tile."""
+
+@overload
+def load(
+    group: WarpGroup,
+    source: object,
+    output: WritableArrayLike,
+    /,
+    *,
+    items_per_thread: int,
+    alignment: None = None,
+    algorithm: WarpLoadStoreAlgorithm = "direct",
+    valid_items: ValidItems | None = None,
+    oob_default: None = None,
+    offset: IntegerValue | None = None,
+    temp_storage: None = None,
+) -> None:
+    """Load warp tiles into each physical block thread's shared row."""
+
+@overload
+def load(
+    group: WarpGroup,
+    source: object,
+    output: WritableArrayLike,
+    /,
+    *,
+    items_per_thread: int,
+    alignment: None = None,
+    algorithm: WarpLoadStoreAlgorithm = "direct",
+    valid_items: ValidItems,
+    oob_default: CommonNumericScalar | float,
+    offset: IntegerValue | None = None,
+    temp_storage: None = None,
+) -> None:
+    """Load partial warp tiles and fill invalid shared output items."""

@@ -12,9 +12,10 @@ request; finalization renders and compiles the wrapper as LTO-IR.
 DIRECT, STRIPED, and VECTORIZE use no shared scratch. Transpose algorithms add
 a shared-memory address, byte capacity, and barrier flag. Finalization
 supplies the address and capacity after C++ layout probes resolve. Load writes
-a temporary register tensor and then replaces the output payload's scalar
-expressions. This wrapper passes Store items as scalars, leaving the payload
-unchanged. The public contract does not promise that after a transpose Store.
+a temporary register tensor and then replaces a ThreadData output's scalar
+expressions, or binds each thread's output array directly to its shared row.
+This wrapper passes Store items as scalars, leaving the payload unchanged.
+The public contract does not promise that after a transpose Store.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import math
 from numbers import Integral, Real
 from typing import Any
 
+from cutlass import cute
 from cutlass._mlir.dialects import llvm
 from cutlass.base_dsl.typing import Int32, Int64, Uint32
 from cutlass.cute.ffi import ffi
@@ -71,6 +73,7 @@ class _CubLoadStoreRequest:
 
     plan: GroupLoweringPlan
     value_type: type
+    shared_output: bool = False
     kind: str = "cub_group_load_store"
 
     def __post_init__(self):
@@ -198,6 +201,8 @@ class _CubLoadStoreRequest:
 
     @property
     def semantic_key(self):
+        if self.shared_output:
+            return (self.plan.artifact_key, "shared_output")
         return self.plan.artifact_key
 
     def __eq__(self, other):
@@ -233,7 +238,8 @@ def _render_cub_load_store(request):
     runtime counts and offset bounds before the call. For warp groups, add the
     group's tile origin and select its scratch slice. Synchronize the group
     after the call when requested. Load copies every item slot to its result
-    buffer; slots beyond ``valid_items`` stay unspecified without a default.
+    buffer, unless the output array directly designates a shared row; slots
+    beyond ``valid_items`` stay unspecified without a default.
     """
 
     request.__post_init__()
@@ -268,18 +274,25 @@ def _render_cub_load_store(request):
         f"void {request.symbol_name}({', '.join(params)}) {{",
         f"  using implementation_type = {request.cpp_type};",
     ]
-    if request.is_warp:
+    if request.is_warp or request.shared_output:
         # CUDA linearizes x first. The same group index selects both the
         # warp's tile in the memory operand and its own shared-scratch slice.
         bx, by, _ = request.block_dim
-        width = request.plan.resolved_group.static_size
         lines.extend(
             [
                 (
                     f"  unsigned int linear_tid = threadIdx.x + {bx}u * "
                     f"(threadIdx.y + {by}u * threadIdx.z);"
                 ),
-                f"  unsigned int group_index = linear_tid / {width}u;",
+            ]
+        )
+        if request.is_warp:
+            width = request.plan.resolved_group.static_size
+            lines.append(f"  unsigned int group_index = linear_tid / {width}u;")
+    if request.shared_output:
+        lines.extend(
+            [
+                '  if (!__isShared(result_items)) { asm volatile("trap;"); }',
             ]
         )
     storage = ""
@@ -314,6 +327,28 @@ def _render_cub_load_store(request):
             ]
         )
         storage = "storage"
+        if request.shared_output:
+            output_bytes = (
+                math.prod(request.block_dim)
+                * operation.items_per_thread
+                * (request.value_type.width // 8)
+            )
+            lines.extend(
+                [
+                    (
+                        "  const auto output_addr = "
+                        "__cvta_generic_to_shared(result_items);"
+                    ),
+                    (
+                        "  if (output_addr < temp_storage_smem_addr + "
+                        "static_cast<unsigned long long>(temp_storage_bytes) &&"
+                    ),
+                    (
+                        "      temp_storage_smem_addr < output_addr + "
+                        f'{output_bytes}ull) {{ asm volatile("trap;"); }}'
+                    ),
+                ]
+            )
     if operation.valid_items.kind is BindingKind.RUNTIME:
         count = (
             request.plan.resolved_group.static_size * operation.items_per_thread
@@ -351,10 +386,19 @@ def _render_cub_load_store(request):
         if is_load
         else ", ".join(f"item{i}" for i in range(operation.items_per_thread))
     )
-    lines.append(
-        f"  {type_specification.cpp_type} items[{operation.items_per_thread}] "
-        f"= {{{initial}}};"
-    )
+    if request.shared_output:
+        lines.append(
+            f"  auto& items = *reinterpret_cast<{type_specification.cpp_type} "
+            f"(*)[{operation.items_per_thread}]>(result_items + "
+            f"static_cast<unsigned long long>(linear_tid) * "
+            f"{operation.items_per_thread});"
+        )
+    else:
+        lines.append(
+            f"  {type_specification.cpp_type} "
+            f"items[{operation.items_per_thread}] "
+            f"= {{{initial}}};"
+        )
     args = ["tile_ptr", "items"]
     for binding, name in (
         (operation.valid_items, "valid_items"),
@@ -372,7 +416,7 @@ def _render_cub_load_store(request):
         f"  implementation_type({storage})."
         f"{request.implementation.method_name}({', '.join(args)});"
     )
-    if is_load:
+    if is_load and not request.shared_output:
         lines.extend(
             f"  result_items[{i}] = items[{i}];"
             for i in range(operation.items_per_thread)
@@ -406,6 +450,7 @@ def _make_request(
     oob_default_binding,
     offset_binding,
     temp_storage=None,
+    shared_output=False,
 ):
     """Require a supported shared plan before creating a provider request."""
 
@@ -421,7 +466,7 @@ def _make_request(
         offset=offset_binding,
         temp_storage=temp_storage,
     ).require_supported()
-    return _CubLoadStoreRequest(plan, value_type)
+    return _CubLoadStoreRequest(plan, value_type, shared_output=shared_output)
 
 
 def provider_load(
@@ -438,6 +483,7 @@ def provider_load(
     offset,
     offset_binding,
     temp_storage=None,
+    items_per_thread=None,
 ):
     """Trace a Load call and copy its per-thread result into ``output``.
 
@@ -448,9 +494,11 @@ def provider_load(
 
     Check source dtype, pointer eligibility, and any provable static capacity
     before registering the request. A temporary register tensor receives the
-    C++ output; its scalar expressions replace the ThreadData items. Runtime
-    binding values supply only the dynamic operands. Scratch registration
-    defers the address and capacity until finalization.
+    C++ output for ThreadData; its scalar expressions replace the payload
+    items. With an explicit item count, the native shared tensor instead
+    supplies the output rows directly. Runtime binding values supply only
+    dynamic operands. Scratch registration defers the address and capacity
+    until finalization.
 
     A failure restores the session's wrapper and scratch records. This
     rollback does not undo emitted IR or assignments already made to the
@@ -464,7 +512,7 @@ def provider_load(
         Compiler-provided launch dimensions used for shared planning.
     source : CuTe memory operand
         Contiguous source memory whose element type sets the Load dtype.
-    output : ThreadData
+    output : ThreadData or native shared tensor
         Writable per-thread payload. Its items become the generated Load
         results, and its dtype is set to the source dtype.
     algorithm : str or enum
@@ -485,6 +533,9 @@ def provider_load(
     temp_storage : TempStorage or None
         Optional block scratch descriptor. None leaves allocation policy to
         the compiler; storage-free algorithms need no scratch operands.
+    items_per_thread : int or None
+        A static count selects native shared output; omission selects
+        ThreadData and takes its existing extent.
 
     Returns
     -------
@@ -493,10 +544,13 @@ def provider_load(
     """
 
     value_type = _resolve_memory_type(source, primitive_name="load")
-    if (
-        output.dtype is not None
-        and _resolve_type(output.dtype) is not value_type
-    ):
+    shared_output = items_per_thread is not None
+    output_type = (
+        _resolve_memory_type(output, primitive_name="load")
+        if shared_output
+        else output.dtype
+    )
+    if output_type is not None and _resolve_type(output_type) is not value_type:
         raise TypeError(
             "cuda.coop.cutlass.load source dtype does not match output"
         )
@@ -505,12 +559,15 @@ def provider_load(
         launch=launch,
         kind=GroupLoadStoreKind.LOAD,
         value_type=value_type,
-        items_per_thread=output.items_per_thread,
+        items_per_thread=(
+            items_per_thread if shared_output else output.items_per_thread
+        ),
         algorithm=algorithm,
         valid_items_binding=valid_items_binding,
         oob_default_binding=oob_default_binding,
         offset_binding=offset_binding,
         temp_storage=temp_storage,
+        shared_output=shared_output,
     )
     pointer = _memory_pointer(
         source,
@@ -524,9 +581,13 @@ def provider_load(
         oob_default=oob_default,
         offset=offset,
     )
-    result = _make_rmem_tensor(
-        output.items_per_thread, value_type, output.alignment
-    )
+    if shared_output:
+        result_pointer = _shared_output_pointer(output, request)
+    else:
+        result = _make_rmem_tensor(
+            output.items_per_thread, value_type, output.alignment
+        )
+        result_pointer = result.iterator.llvm_ptr
     snapshot = _state.snapshot_active_session_state()
     try:
         _state.register_request(request)
@@ -540,13 +601,38 @@ def provider_load(
                 llvm.PointerType.get(0),
             ],
             return_type=None,
-        )(pointer, *runtime_args, *scratch_args, result.iterator.llvm_ptr)
-        output.dtype = value_type
-        for i in range(output.items_per_thread):
-            output[i] = result[i]
+        )(pointer, *runtime_args, *scratch_args, result_pointer)
+        if not shared_output:
+            output.dtype = value_type
+            for i in range(output.items_per_thread):
+                output[i] = result[i]
     except BaseException:
         _state.restore_active_session_state(snapshot)
         raise
+
+
+def _shared_output_pointer(output, request):
+    """Require a full block of disjoint per-thread rows in shared memory."""
+
+    iterator = getattr(output, "iterator", None)
+    if getattr(iterator, "memspace", None) != cute.AddressSpace.smem:
+        raise TypeError("cuda.coop.cutlass.load output must be a shared tensor")
+    shape = getattr(output, "shape", None)
+    if shape is None or cute.rank(shape) != 1:
+        raise TypeError(
+            "cuda.coop.cutlass.load shared output must be one-dimensional"
+        )
+    if static_layout_elements(output) is None:
+        raise TypeError(
+            "cuda.coop.cutlass.load shared output requires a static capacity"
+        )
+    return _memory_pointer(
+        output,
+        primitive_name="load shared output",
+        required_elements=(
+            math.prod(request.block_dim) * request.operation.items_per_thread
+        ),
+    )
 
 
 def provider_store(
