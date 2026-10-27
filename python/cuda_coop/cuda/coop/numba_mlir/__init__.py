@@ -23,7 +23,12 @@ load on first access.
 import importlib
 from typing import TYPE_CHECKING
 
-from .._core.api import TempStorageLike, ThreadDataLike
+from .._core.api import (
+    PendingSharedCopyLike,
+    TempStorageLike,
+    ThreadDataLike,
+    load_to_shared_async,
+)
 from ._compiler._activation import _initialize_runtime_hooks
 from ._group._load_store import load, store
 from ._temp_storage import TempStorage
@@ -71,6 +76,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Hierarchy",
+    "PendingSharedCopyLike",
     "StatefulFunction",
     "TempStorage",
     "TempStorageLike",
@@ -87,6 +93,7 @@ __all__ = [
     "inclusive_scan",
     "inclusive_sum",
     "load",
+    "load_to_shared_async",
     "local",
     "merge_sort_keys",
     "merge_sort_pairs",

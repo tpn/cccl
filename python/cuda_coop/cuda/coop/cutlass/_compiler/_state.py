@@ -56,6 +56,7 @@ class BundleSession:
         self.requests = set()
         self._deferred_temp_storage_events: list[DeferredTempStorageEvent] = []
         self._temp_storage_lifetime_events: list[Any] = []
+        self.pending_shared_loads: list[Any] = []
         self._lock = threading.RLock()
 
     def add(self, request):
@@ -71,16 +72,20 @@ class BundleSession:
                 set(self.requests),
                 list(self._deferred_temp_storage_events),
                 list(self._temp_storage_lifetime_events),
+                list(self.pending_shared_loads),
             )
 
     def restore(self, snapshot):
         """Restore trace bookkeeping without changing emitted MLIR."""
 
         with self._lock:
-            self.trace_module_op, requests, events, lifetimes = snapshot
+            self.trace_module_op, requests, events, lifetimes, pending = (
+                snapshot
+            )
             self.requests = set(requests)
             self._deferred_temp_storage_events = list(events)
             self._temp_storage_lifetime_events = list(lifetimes)
+            self.pending_shared_loads = list(pending)
 
     def request_list(self):
         """Order requests by symbol and reject conflicting definitions."""

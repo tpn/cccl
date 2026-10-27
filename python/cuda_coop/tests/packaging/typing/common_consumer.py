@@ -81,6 +81,11 @@ def check_common_surface(
     coop.this_grid().rank()
     assert_type(values, coop.ThreadDataLike[np.int16])
     assert_type(storage, coop.TempStorageLike)
+    pending = coop.load_to_shared_async(
+        block, source, destination, num_items=64, offset=1
+    )
+    assert_type(pending, coop.PendingSharedCopyLike)
+    assert_type(pending.wait(), Any)
     assert_type(
         coop.load(
             block,

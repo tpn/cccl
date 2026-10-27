@@ -89,6 +89,17 @@ Memory operations
 .. autofunction:: load
 .. autofunction:: store
 
+See :doc:`global-to-shared copies <coop/load_to_shared>` for whole-buffer
+staging and completion rules.
+
+.. autofunction:: load_to_shared_async
+
+.. autoclass:: PendingSharedCopyLike
+   :no-members:
+   :no-special-members:
+
+   .. automethod:: wait
+
 Reduction
 ^^^^^^^^^
 
@@ -213,6 +224,7 @@ Memory operations
 
 .. autofunction:: load
 .. autofunction:: store
+.. autofunction:: load_to_shared_async
 
 Reduction
 ^^^^^^^^^
@@ -343,6 +355,7 @@ Memory operations
 
 .. autofunction:: load
 .. autofunction:: store
+.. autofunction:: load_to_shared_async
 
 Reduction
 ^^^^^^^^^

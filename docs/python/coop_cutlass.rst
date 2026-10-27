@@ -25,6 +25,10 @@ compiler integration works. For Numba kernels, see the
 :doc:`Numba-CUDA-MLIR Programming Guide <coop/programming_guide>` and
 :doc:`Numba-CUDA-MLIR Developer Guide <coop/developer_overview>`.
 
+For whole-buffer asynchronous tile staging, see the
+:doc:`global-to-shared copy guide <coop/load_to_shared>`. Its pending handle
+returns a native shared tensor after completion.
+
 .. _coop-cutlass-api-choice:
 
 .. _choosing-the-portable-or-qualified-api:
@@ -395,7 +399,7 @@ synchronization with ``storage.sync()`` calls.
    :end-before: docs: end cutlass-block-storage
 
 Typed workspaces for native CuTe code
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``storage.reserve(num_elems, dtype, alignment=None)`` returns an ordinary
 one-dimensional CuTe shared tensor. Its element count, dtype, and optional

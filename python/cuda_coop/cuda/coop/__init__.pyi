@@ -7,6 +7,10 @@ from typing import Literal
 from ._core.api.exchange import exchange
 from ._core.api.histogram import histogram as histogram
 from ._core.api.load_store import load, store
+from ._core.api.load_to_shared import (
+    PendingSharedCopyLike,
+    load_to_shared_async,
+)
 from ._core.api.merge_sort import merge_sort_keys as merge_sort_keys
 from ._core.api.merge_sort import merge_sort_pairs as merge_sort_pairs
 from ._core.api.neighbors import adjacent_difference as adjacent_difference
@@ -57,6 +61,7 @@ def register(
 
 __all__ = [
     "Hierarchy",
+    "PendingSharedCopyLike",
     "TempStorage",
     "TempStorageLike",
     "ThreadData",
@@ -73,6 +78,7 @@ __all__ = [
     "inclusive_scan",
     "inclusive_sum",
     "load",
+    "load_to_shared_async",
     "merge_sort_keys",
     "merge_sort_pairs",
     "radix_rank_keys",

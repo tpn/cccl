@@ -195,6 +195,11 @@ def check_numba_surface(
     """Exercise Numba declarations through their public package."""
 
     block = numba_coop.this_block()
+    pending = numba_coop.load_to_shared_async(
+        block, source, destination, num_items=64, offset=1
+    )
+    assert_type(pending, numba_coop.PendingSharedCopyLike)
+    assert_type(pending.wait(), Any)
     warp = numba_coop.this_warp()
     logical_warp = warp.group_by(8)
     mapped_warps = block.group_by(2)

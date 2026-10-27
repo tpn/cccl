@@ -83,6 +83,10 @@ def _trace_finalize_hook(dsl, module, function_name):
     session = _state.pop_bundle_session(options, trace_module_op=module)
     if session is None or session.is_empty():
         return
+    if session.pending_shared_loads:
+        from .._lowering._load_to_shared import validate_pending_loads
+
+        validate_pending_loads(session)
     _lifetime.validate_temp_storage_lifetimes(session)
     requests = session.request_list()
     if not requests:
