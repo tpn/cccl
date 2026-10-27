@@ -636,7 +636,7 @@ completion token. CUTLASS uses the same memory directions with native shared
 CuTe tensors; see :ref:`its executable example <coop-cutlass-load-store>`.
 
 Tile bounds and defaults
-^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^
 
 Runtime ``valid_items`` and ``offset`` accept signed integers through 64 bits
 and unsigned integers through 32 bits. Boolean, floating-point, and

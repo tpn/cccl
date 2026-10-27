@@ -307,7 +307,7 @@ across compiler backends and the inference described above.
 .. _coop-faq-load-forms:
 
 When should I use returning Load or its output parameter?
---------------------------------------------------------
+---------------------------------------------------------
 
 Prefer ``values = coop.load(group, source, items_per_thread=N)`` for fresh
 values. It returns a ``ThreadData`` with the source's dtype. Use
@@ -324,7 +324,7 @@ per-thread values. A shared source does not require the output form.
 Direct ``ThreadData`` construction and its dtype inference remain supported.
 
 Can Load fill a shared array or a ``TempStorage.reserve`` view directly?
-----------------------------------------------------------------------
+------------------------------------------------------------------------
 
 Currently, Load's ``output`` must be a supported per-thread payload. A
 block-shared array is a memory operand, not such a payload. Use returning
