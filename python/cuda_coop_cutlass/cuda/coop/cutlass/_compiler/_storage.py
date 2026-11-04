@@ -490,6 +490,172 @@ def _replace_all_uses(old_value: Any, new_value: Any) -> None:
     _deferred_temp_storage_capability_error()
 
 
+def _include_deferred_storage_in_launches(plans) -> None:
+    """Include deferred cooperative scratch in existing CuTe host launches.
+
+    A kernel can mix native shared buffers with cooperative operations while
+    its caller supplies an explicit shared-memory budget. For example, this
+    is the allocation/launch structure of a fused norm, with the arithmetic
+    and synchronization omitted::
+
+        @cute.kernel
+        def fused_norm(...):
+            smem = SmemAllocator()
+            x_tile = smem.allocate(16_384, 16)
+            residual_tile = smem.allocate(16_384, 16)
+            reduction_buffer = smem.allocate(16, 4)
+            ...
+            total = coop.sum(group, partial)
+            ...
+
+        fused_norm(...).launch(..., smem=32_784)
+
+    FlashInfer's BF16 fused-add RMSNorm at hidden width 4096 exposed this
+    failure: its native buffers needed 32,784 bytes, but replacing its warp
+    reductions with coop introduced two deferred scratch allocations. Their
+    placement and alignment shifted the native buffers by 16 bytes, making
+    the final layout 32,800 bytes. The unchanged explicit launch budget
+    caused out-of-bounds shared-memory writes.
+
+    Exact C++ scratch layouts become known when the provider bundle is
+    compiled in the trace-finalization hook. CuTe has already traced the
+    host launch and its explicit-size diagnostic by then. Adding allocations
+    to the kernel therefore also requires updating that existing host IR.
+    Walk the enclosing module and match kernel symbols to update each
+    cuda.launch or cuda.launch_ex of an affected kernel, including launches
+    in other host regions.
+
+    Query CuTe's final kernel_smem_size instead of adding the plan sizes:
+    CuTe lays out native and cooperative allocations together, including
+    alignment between them. Keep max(requested, inferred) so larger caller
+    reservations remain intact and existing headroom is not charged twice.
+    CuTe supplies dynamic shared-memory opt-in separately when loading the
+    kernel; this rewrite sets the requested byte count, not the hardware
+    limit. CUDA can still reject a launch that exceeds the device's capacity.
+
+    This bridge depends on CuTe's launch operations, operand positions and
+    symbol attributes. Recheck those assumptions when changing the compiler
+    dependency. The compile regression checks the actual lowered launch
+    field for inferred, explicit and runtime budgets. An upstream mechanism
+    that recomputes this minimum after deferred allocation would let us
+    remove the host-IR rewrite.
+    """
+    from cutlass._mlir import ir
+    from cutlass._mlir.dialects import arith, cute
+
+    modules = {}
+    for plan in plans:
+        kernel = plan.kernel_op
+        gpu_module = kernel.parent
+        symbol = ir.SymbolRefAttr.get(
+            [
+                ir.StringAttr(gpu_module.attributes["sym_name"]).value,
+                ir.StringAttr(kernel.attributes["sym_name"]).value,
+            ]
+        )
+        root = gpu_module
+        while root.parent is not None:
+            root = root.parent
+        modules.setdefault(root, set()).add(symbol)
+
+    for module, symbols in modules.items():
+        launches = []
+        queries = []
+
+        def collect(operation):
+            if operation.name in ("cuda.launch", "cuda.launch_ex"):
+                if operation.attributes["callee"] in symbols:
+                    launches.append(operation)
+            elif operation.name == "cute.kernel_smem_size":
+                if operation.attributes["kernel_name"] in symbols:
+                    queries.append(operation)
+            return ir.WalkResult.ADVANCE
+
+        module.walk(collect)
+        for launch in launches:
+            if launch.name == "cuda.launch_ex":
+                config = launch.opview.launch_cfg.owner
+                if config.name != "cuda.launch_cfg.create":
+                    raise DSLRuntimeError(
+                        "Deferred TempStorage requires a traced CUDA launch "
+                        "configuration to account for its shared memory."
+                    )
+                owner, index = config, 3  # dynamicSmemBytes
+            else:
+                owner, index = launch, 6  # dynamicSmem
+            original = owner.operands[index]
+
+            def source(value):
+                while getattr(value.owner, "name", None) in (
+                    "arith.extsi",
+                    "arith.extui",
+                ):
+                    value = value.owner.operands[0]
+                return value
+
+            # CuTe traced a warning equivalent to:
+            #   if requested < kernel_smem_size(kernel): print(...)
+            # Raising the launch budget below would leave this comparison
+            # using the obsolete request. Refresh only a comparison for the
+            # same kernel and original budget whose uses are all result-free,
+            # print-only scf.if operations.
+            #
+            # Checking body operations alone is insufficient: print/yield
+            # branches can still select an SSA value consumed by host code.
+            # Changing that predicate would change program behavior. Leave
+            # those branches, other conditions and hardware-limit checks
+            # intact. An unrecognized diagnostic shape may retain a stale
+            # warning; repairing the launch budget does not depend on this
+            # optional diagnostic rewrite.
+            for query in queries:
+                if (
+                    query.attributes["kernel_name"]
+                    != launch.attributes["callee"]
+                ):
+                    continue
+                for use in list(query.results[0].uses):
+                    check = use.owner
+                    if (
+                        check.name != "arith.cmpi"
+                        or ir.IntegerAttr(check.attributes["predicate"]).value
+                        != arith.CmpIPredicate.slt
+                        or not ir.Value.__eq__(
+                            check.operands[1], query.results[0]
+                        )
+                        or not ir.Value.__eq__(
+                            source(check.operands[0]), source(original)
+                        )
+                    ):
+                        continue
+                    users = [use.owner for use in check.results[0].uses]
+                    if not users or any(
+                        user.name != "scf.if" or len(user.results) != 0
+                        for user in users
+                    ):
+                        continue
+                    bodies = [
+                        child.operation.name
+                        for user in users
+                        for region in user.regions
+                        for block in region.blocks
+                        for child in block.operations
+                    ]
+                    if "cute.print" not in bodies or set(bodies) - {
+                        "cute.print",
+                        "scf.yield",
+                    }:
+                        continue
+                    with ir.InsertionPoint(check), check.location:
+                        check.operands[0] = arith.maxsi(
+                            check.operands[0], query.results[0]
+                        )
+            with ir.InsertionPoint(owner), owner.location:
+                inferred = cute.kernel_smem_size(launch.attributes["callee"])
+                owner.operands[index] = arith.maxsi(
+                    owner.operands[index], inferred
+                )
+
+
 def materialize_deferred_temp_storage_plans(
     plans: tuple[DeferredTempStoragePlan, ...],
 ) -> None:
@@ -585,3 +751,5 @@ def materialize_deferred_temp_storage_plans(
                         smem_addr,
                     )
                     _replace_all_uses(binding.event.size_placeholder, size)
+
+    _include_deferred_storage_in_launches(plans)
