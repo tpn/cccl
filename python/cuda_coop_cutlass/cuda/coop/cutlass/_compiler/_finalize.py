@@ -77,10 +77,11 @@ def _trace_finalize_hook(dsl, module, function_name):
     del function_name
     options = dsl.compile_options
     _remove_managed_bundle_link_options(dsl)
-    session = _state.lookup_bundle_session(options, trace_module_op=module)
-    if session is None or not session.belongs_to_trace_module(module):
-        return
+    # This persistent hook also runs for traces without cooperative work.
+    # Select and remove this module's session under one lock. Other traces
+    # stay pending, and a repeated hook cannot consume this session again.
     session = _state.pop_bundle_session(options, trace_module_op=module)
+    # An existing session may have no queued work after lowering rollback.
     if session is None or session.is_empty():
         return
     _lifetime.validate_temp_storage_lifetimes(session)
