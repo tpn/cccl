@@ -48,7 +48,7 @@ def test_exact_per_group_scratch():
     compilation = _bundle.compile_bundle_source_with_layouts(
         _rendering.render_bundle_source(requests),
         arch="compute_80",
-        required_headers=tuple(_rendering.registered_bundle_headers().values()),
+        required_headers=_rendering.bundle_headers(requests),
         layout_probes=tuple(probes.values()),
     )
     one, two = [

@@ -105,7 +105,7 @@ def _trace_finalize_hook(dsl, module, function_name):
                 f"but this kernel targets {arch}; compile the operator "
                 "for the kernel's architecture."
             )
-    headers = tuple(_rendering.registered_bundle_headers().values())
+    headers = _rendering.bundle_headers(requests)
     probes = _rendering.bundle_scratch_layout_probes(requests)
     if probes:
         compilation = _bundle.compile_bundle_source_with_layouts(

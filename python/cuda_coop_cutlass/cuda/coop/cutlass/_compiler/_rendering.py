@@ -30,6 +30,8 @@ def register_bundle_renderer(
 
     ``render`` emits a request's C++ lines. ``include_lines`` and
     ``cccl_headers`` supply its preamble and header lookup requirements. The
+    header mappings pair emitted include lines with relative CCCL paths;
+    only mappings used by the bundle's preamble are required. The
     optional ``scratch_layout_probe`` callback returns a layout query or
     ``None`` for each request. A kind can have only one registered renderer.
     """
@@ -120,16 +122,21 @@ def bundle_include_lines(requests: Iterable[Any]) -> list[str]:
     return list(canonical_bundle_preamble_lines(include_lines))
 
 
-def registered_bundle_headers() -> dict[str, str]:
-    """Merge header mappings and reject conflicting paths.
+def bundle_headers(requests: Iterable[Any]) -> tuple[str, ...]:
+    """Return registered CCCL lookup paths used by this bundle's includes.
 
-    The compiler resolves these headers before computing the bundle cache key.
+    Use the same preamble selection as source rendering. A renderer can
+    register alternatives, such as block and warp headers, without requiring
+    all of them for each request. Reject conflicting paths for used includes.
     """
 
+    include_lines = set(bundle_include_lines(requests))
     headers: dict[str, str] = {}
     for kind in sorted(_BUNDLE_RENDERERS):
         renderer = _BUNDLE_RENDERERS[kind]
         for include, relative_path in sorted(renderer.cccl_headers):
+            if include not in include_lines:
+                continue
             existing = headers.get(include)
             if existing is not None and existing != relative_path:
                 raise ValueError(
@@ -137,7 +144,7 @@ def registered_bundle_headers() -> dict[str, str]:
                     "CCCL headers"
                 )
             headers[include] = relative_path
-    return {include: headers[include] for include in sorted(headers)}
+    return tuple(headers[include] for include in sorted(headers))
 
 
 def make_scratch_layout_probe(requirement_key, cpp_type):

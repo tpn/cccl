@@ -50,6 +50,7 @@ def compilation(monkeypatch, tmp_path):
     monkeypatch.setattr(_cache, "_MANAGED_BUNDLE_PATHS", set())
     state = SimpleNamespace(
         calls=[],
+        required_headers=[],
         context=_nvrtc.CompileContext(
             ("/headers",),
             "headers-v1",
@@ -62,9 +63,12 @@ def compilation(monkeypatch, tmp_path):
             (13, 3),
         ),
     )
-    monkeypatch.setattr(
-        _nvrtc, "resolve_compile_context", lambda headers: state.context
-    )
+
+    def resolve_context(headers):
+        state.required_headers.append(headers)
+        return state.context
+
+    monkeypatch.setattr(_nvrtc, "resolve_compile_context", resolve_context)
 
     def compile_source(source, options):
         state.calls.append((source, options))
@@ -186,6 +190,14 @@ def test_bundle_includes_only_requested_load_store_headers(
             "#include <cuda/std/cstdint>",
         )
     )
+    assert _rendering.bundle_headers([*requests, requests[0]]) == tuple(
+        sorted(
+            (
+                f"cub/{load_scope}/{load_scope}_load.cuh",
+                f"cub/{store_scope}/{store_scope}_store.cuh",
+            )
+        )
+    )
 
 
 def test_storage_free_request_identity_ignores_storage_controls():
@@ -203,15 +215,17 @@ def test_storage_free_request_identity_ignores_storage_controls():
     assert default.symbol_name == explicit.symbol_name
 
 
+@pytest.mark.parametrize("scope", ("block", "warp"))
 def test_finalize_preserves_unrelated_session_and_user_link_libraries(
-    compilation, monkeypatch
+    compilation, monkeypatch, scope
 ):
     """Keep trace ownership separate from removal of managed link paths.
 
     An unrelated finalization removes managed bundle paths from the options,
     but must retain the user's library and the pending owner session.
     Only finalizing the owning module consumes that session and links its
-    bundle; a repeated hook must not attach it again.
+    bundle; a repeated hook must not attach it again. Header validation must
+    require only the load/store headers used by that module.
     """
 
     class Options:
@@ -223,7 +237,13 @@ def test_finalize_preserves_unrelated_session_and_user_link_libraries(
     session = _state.get_or_create_bundle_session(
         options, trace_module_op=owned_module
     )
-    session.add(_request())
+    group = this_block() if scope == "block" else this_warp()
+    for kind in ("load", "store"):
+        session.add(
+            _CubLoadStoreRequest(
+                _plan(group, _load_store(kind, dtype=Int32)), Int32
+            )
+        )
     path = _compile()
     options.options[LinkLibraries] = LinkLibraries(
         f"/user/provider.ltoir,{path}"
@@ -240,6 +260,10 @@ def test_finalize_preserves_unrelated_session_and_user_link_libraries(
         _bundle, "append_link_library_attr", lambda m, p: linked.append((m, p))
     )
     _finalize._trace_finalize_hook(dsl, owned_module, "owned")
+    assert compilation.required_headers[-1] == (
+        f"cub/{scope}/{scope}_load.cuh",
+        f"cub/{scope}/{scope}_store.cuh",
+    )
     assert _state.lookup_bundle_session(options) is None
     assert len(linked) == 1
     assert linked[0][0] is owned_module

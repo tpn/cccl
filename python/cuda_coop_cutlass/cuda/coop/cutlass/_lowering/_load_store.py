@@ -1197,10 +1197,10 @@ _rendering.register_bundle_renderer(
     scratch_layout_probe=_scratch_layout_probe,
     include_lines=("#include <cuda/std/cstdint>",),
     cccl_headers=(
-        ("cub/block/block_load.cuh", "cub/block/block_load.cuh"),
-        ("cub/block/block_store.cuh", "cub/block/block_store.cuh"),
-        ("cub/warp/warp_load.cuh", "cub/warp/warp_load.cuh"),
-        ("cub/warp/warp_store.cuh", "cub/warp/warp_store.cuh"),
+        ("#include <cub/block/block_load.cuh>", "cub/block/block_load.cuh"),
+        ("#include <cub/block/block_store.cuh>", "cub/block/block_store.cuh"),
+        ("#include <cub/warp/warp_load.cuh>", "cub/warp/warp_load.cuh"),
+        ("#include <cub/warp/warp_store.cuh>", "cub/warp/warp_store.cuh"),
     ),
 )
 
