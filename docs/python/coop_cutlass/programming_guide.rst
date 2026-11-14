@@ -654,6 +654,10 @@ available even on lanes outside that prefix. A zero count is invalid. Block Scan
 accepts CuTe register tensors for block Scan and returns ``ThreadData``; use
 its conversion methods when a register-tensor result is needed.
 
+Inside runtime control flow, create ``aggregate_output`` in the current
+branch or loop body. Carry its value out with an explicit subscript
+assignment; see :ref:`scan aggregates in loops <coop-faq-scan-loop-aggregate>`.
+
 The :ref:`introductory prefix-sum example <coop-cutlass-load-store>` uses
 ``exclusive_scan`` with an initial value of seven and shares scratch with
 Load and Store.
@@ -995,7 +999,8 @@ load/store payload.
 An initialized ``ThreadData`` can cross CuTe runtime loops and branches while
 retaining its fixed item count, dtype, and requested alignment. Initialize
 every item in every participating thread before carrying the payload across
-a runtime control-flow boundary.
+a runtime control-flow boundary. Changes to dtype or alignment across that
+boundary are rejected; use an explicit conversion to keep both paths consistent.
 
 Load and Store infer the memory element type from the CuTe operand. If a
 producer or tensor adapter loses the intended unsigned element type, use

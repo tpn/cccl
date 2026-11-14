@@ -408,7 +408,15 @@ def _coerce_payload_values_to_dtype(
     index and conversion source so a caller can locate the bad value.
     """
 
-    if not (_is_cutlass_dsl_dtype(dtype) or _is_ordinary_scalar_dtype(dtype)):
+    import numpy as np
+
+    from ._compiler._types import ALL_PROVIDER_TYPES, canonical_dsl_type
+
+    scalar_dtype = dtype.type if isinstance(dtype, np.dtype) else dtype
+    if not (
+        _is_cutlass_dsl_dtype(scalar_dtype)
+        or _is_ordinary_scalar_dtype(scalar_dtype)
+    ):
         return values
 
     coerced = []
@@ -417,10 +425,21 @@ def _coerce_payload_values_to_dtype(
             coerced.append(value)
             continue
         try:
-            if isinstance(value, dtype):
+            # Host constructors cannot consume traced CuTe values. Resolve
+            # their dtype spelling before casting a device expression.
+            cast_dtype = scalar_dtype
+            if not isinstance(value, (bool, int, float, complex, np.generic)):
+                resolved = canonical_dsl_type(dtype)
+                if resolved in ALL_PROVIDER_TYPES:
+                    cast_dtype = resolved
+            if _is_cutlass_dsl_dtype(cast_dtype) and isinstance(
+                value, np.generic
+            ):
+                value = value.item()
+            if type(value) is cast_dtype:
                 coerced.append(value)
             else:
-                coerced.append(dtype(value))
+                coerced.append(cast_dtype(value))
         except Exception as exc:
             raise TypeError(
                 f"{source} dtype cannot be applied to payload item {idx}"
@@ -488,7 +507,13 @@ def _resolve_export_shape(
             f"{source} shape must contain exactly items_per_thread elements "
             f"({inferred} != {items_per_thread})"
         )
-    return shape
+
+    def normalize(extent):
+        if isinstance(extent, (tuple, list)):
+            return tuple(normalize(item) for item in extent)
+        return int(_operator.index(extent))
+
+    return normalize(shape)
 
 
 def _resolve_export_dtype(dtype: Any, *, fallback: Any, source: str) -> Any:
@@ -583,6 +608,12 @@ class ThreadData:
             if values is not None
             else [_UNSET for _ in range(self.items_per_thread)]
         )
+        from cutlass._mlir import ir
+
+        try:
+            self._creation_block = ir.InsertionPoint.current.block
+        except ValueError:
+            self._creation_block = None
 
     @classmethod
     def from_values(cls, *values: Any, dtype: Any = None) -> ThreadData:
@@ -829,7 +860,16 @@ class ThreadData:
                         "ThreadData.from_payload items_per_thread does not "
                         "match payload.items_per_thread"
                     )
+            from ._compiler._types import ALL_PROVIDER_TYPES, canonical_dsl_type
+
             if dtype is None or payload.dtype == dtype:
+                return payload
+            if (
+                payload.dtype is not None
+                and canonical_dsl_type(dtype) in ALL_PROVIDER_TYPES
+                and canonical_dsl_type(payload.dtype)
+                is canonical_dsl_type(dtype)
+            ):
                 return payload
             if payload.dtype is not None:
                 raise TypeError(
@@ -999,7 +1039,14 @@ class ThreadData:
             items_per_thread=self.items_per_thread,
             source=source,
         )
-        values = self.values(source)
+        # Validate the original declaration before applying an explicit export
+        # conversion. Vector.from_elements receives already typed values so
+        # its signless IR casts cannot change unsigned numeric semantics.
+        if self.dtype is None:
+            values = self.values(source)
+        else:
+            _, values = self._dynamic_values(feature=source)
+        values = _coerce_payload_values_to_dtype(values, dtype, source=source)
 
         import cutlass.cute as _cute
         from cutlass import Vector
@@ -1061,7 +1108,9 @@ class ThreadData:
         idx = self._index(idx)
         self._values[idx] = value
 
-    def _dynamic_values(self) -> tuple[type, tuple[Any, ...]]:
+    def _dynamic_values(
+        self, *, feature: str = "ThreadData control flow"
+    ) -> tuple[type, tuple[Any, ...]]:
         """Resolve payload items to typed scalars for CuTe IR operations.
 
         CuTe uses ``__extract_mlir_values__`` and ``__new_from_mlir_values__``
@@ -1087,7 +1136,7 @@ class ThreadData:
         value_type, values = _types.resolve_thread_data_value_type(
             self,
             allowed=_types.ALL_PROVIDER_TYPES,
-            feature="ThreadData control flow",
+            feature=feature,
             scope=_ROOT_SCOPE,
             resolve_type=resolve_type,
         )
@@ -1096,7 +1145,7 @@ class ThreadData:
             plain = _types.coerce_plain_scalar(
                 value,
                 value_type,
-                name="ThreadData control-flow value",
+                name=f"{feature} value",
                 scope=_ROOT_SCOPE,
                 allow_nonfinite=True,
             )
@@ -1107,8 +1156,30 @@ class ThreadData:
             )
         return value_type, tuple(converted)
 
+    def _control_flow_metadata(self, value_type: type) -> Any:
+        """Keep dtype signedness and alignment in the control-flow type.
+
+        Integer MLIR scalars are signless. A static layout value distinguishes
+        otherwise identical leaves when branches rebind a payload with different
+        metadata. It has no runtime data and is eliminated during lowering.
+        """
+        from cutlass import cute
+        from cutlass.base_dsl import extract_mlir_values
+
+        from ._compiler._types import INTEGER_VALUE_TYPES
+
+        kind = (
+            1 + int(value_type.signed)
+            if value_type in INTEGER_VALUE_TYPES
+            else 3
+        )
+        layout = cute.make_layout(
+            (kind, value_type.width, (self.alignment or 0) + 1)
+        )
+        return extract_mlir_values(layout)[0]
+
     def __extract_mlir_values__(self) -> list[Any]:
-        """Expose one scalar IR value per payload item to CuTe.
+        """Expose static metadata and one scalar IR value per item to CuTe.
 
         CuTe calls this hook to flatten a Python payload into scalar IR
         operands, including for function calls and runtime branches or loops.
@@ -1118,11 +1189,13 @@ class ThreadData:
         Returns
         -------
         list
-            One typed MLIR scalar per initialized payload item, in index
-            order.
+            Static metadata followed by one typed MLIR scalar per initialized
+            payload item, in index order.
         """
-        _, values = self._dynamic_values()
-        return [value.ir_value() for value in values]
+        value_type, values = self._dynamic_values()
+        return [self._control_flow_metadata(value_type)] + [
+            value.ir_value() for value in values
+        ]
 
     def __new_from_mlir_values__(self, values: list[Any]) -> ThreadData:
         """Rebuild a payload from replacement scalar IR values.
@@ -1132,33 +1205,38 @@ class ThreadData:
         results. A block argument names a value supplied on entry to an IR
         block. The hook wraps the supplied scalars in a new Python container.
 
-        Require one value per item. Keep the alignment and dtype. Keep a
+        Require static metadata and one value per item. Keep a
         declared dtype; without one, record the item type inferred from
         the original payload.
 
         Parameters
         ----------
         values : list
-            Replacement scalar IR values in the item order established by
-            ``__extract_mlir_values__``; their count must match
-            items_per_thread.
+            Static metadata followed by replacement scalar IR values in the
+            item order established by ``__extract_mlir_values__``.
 
         Returns
         -------
         ThreadData
             Reconstructed payload with the same item count and alignment.
         """
-        if len(values) != self.items_per_thread:
+        if len(values) != self.items_per_thread + 1:
             raise ValueError(
-                "ThreadData control flow requires one value per item"
+                "ThreadData control flow requires metadata "
+                "and one value per item"
             )
         from ._compiler._types import thread_data_output_dtype
 
         value_type, _ = self._dynamic_values()
+        if values[0].type != self._control_flow_metadata(value_type).type:
+            raise TypeError(
+                "ThreadData dtype and alignment must remain unchanged across "
+                "runtime branches and loops"
+            )
         result = ThreadData(
             self.items_per_thread,
             dtype=thread_data_output_dtype(self, value_type),
-            values=[value_type(value) for value in values],
+            values=[value_type(value) for value in values[1:]],
             alignment=self.alignment,
         )
         return result
@@ -1175,15 +1253,21 @@ class ThreadData:
         return result
 
     def __deepcopy__(self, memo: dict[int, Any]) -> ThreadData:
-        """Copy dtype and items while retaining the uninitialized sentinel."""
+        """Copy the container, sharing immutable traced scalar values."""
+
+        def copy_item(value):
+            if value is _UNSET or _is_cutlass_dsl_dtype(type(value)):
+                return value
+            from cutlass._mlir import ir
+
+            if isinstance(value, ir.Value):
+                return value
+            return _deepcopy(value, memo)
 
         result = ThreadData(
             self.items_per_thread,
             dtype=_deepcopy(self.dtype, memo),
-            values=[
-                _UNSET if value is _UNSET else _deepcopy(value, memo)
-                for value in self._values
-            ],
+            values=[copy_item(value) for value in self._values],
         )
         result.alignment = self.alignment
         memo[id(self)] = result

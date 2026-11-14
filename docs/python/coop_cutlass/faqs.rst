@@ -318,6 +318,117 @@ they are not broadcast to every lane. Each returned payload has
 batch are unspecified. The :doc:`feature-sum example
 <visualizations/reduce-batched>` guards its stores by batch index.
 
+.. _coop-faq-collective-control-flow:
+
+Can thread-local work surround a collective?
+--------------------------------------------
+
+Yes. A leader thread can prepare data before a collective and consume its
+result afterwards. Every member of the group must reach the collective in
+the same iteration, including members whose inputs are excluded by
+``valid_items``. A condition around the collective itself must be uniform
+across the group. A block collective inside ``if thread == 0`` violates
+this requirement.
+
+Use a runtime ``if`` statement for conditional collective calls. A runtime
+conditional expression such as ``coop.sum(block, x) if condition else y``
+is rejected when it needs temporary storage. Synchronize application data
+before another thread reads it; the collective's scratch-reuse barrier does
+not replace synchronization required by earlier application writes.
+
+.. _coop-faq-scan-loop-aggregate:
+
+How do I carry a scan aggregate across loop iterations?
+-------------------------------------------------------
+
+Create ``aggregate_output`` inside the loop, then explicitly assign its
+item to the payload carried across iterations. CuTe recognizes that
+assignment as a loop-carried update. An outer payload used without an
+explicit loop-carried update is rejected: the implicit mutation alone cannot
+carry its new value out of the runtime region.
+
+.. code-block:: python
+
+   aggregate = coop.ThreadData.from_values(cutlass.Int32(0))
+   total = cutlass.Int32(0)
+   for _ in cutlass.range(iterations):
+       total = total + aggregate[0]
+       current = coop.ThreadData(1)
+       prefix = coop.inclusive_sum(block, value, aggregate_output=current)
+       aggregate[0] = current[0]
+
+The same rule applies to runtime branches and Radix Rank's
+``exclusive_digit_prefix``: create the output in that region and copy its
+items explicitly before leaving it. Keep the condition or iteration count
+uniform across the participating group. The scan aggregate excludes the
+exclusive seed and is available to every member; an ordinary Reduce result
+is defined only at group rank zero.
+
+.. _coop-faq-payload-conversion:
+
+How do I change a payload's element type?
+-----------------------------------------
+
+Use ``ThreadData.from_fn(len(values), lambda i: values[i],
+dtype=cutlass.Float32)`` to create a converted payload. Supported NumPy
+scalar classes and ``np.dtype``
+selectors name the same element types as their CUTLASS equivalents.
+``int`` and ``float`` select ``Int32`` and ``Float32`` for runtime CuTe
+values.
+
+``ThreadData(..., dtype=..., values=...)`` and ``from_values`` declare the
+type of existing items. Typed items must agree with that declaration;
+changing metadata does not convert them. Export to a register tensor or
+``TensorSSA`` checks the source declaration before applying an explicit
+output dtype. Widening unsigned input preserves its unsigned value.
+An explicit narrowing conversion can discard information, so choose the
+destination width deliberately.
+
+Carry a fixed item count, dtype, and alignment through runtime branches
+and loops. Changing any of these properties at a runtime join is rejected.
+Initialize loop-carried payloads with the alignment of the values that
+will replace them. A CuTe "different structure" diagnostic can indicate a
+dtype or alignment change. Normalize branch results before the join, or use
+a compile-time condition when each alternative needs a different
+representation.
+
+.. _coop-faq-storage-control-flow:
+
+Can I choose temporary storage inside a branch or loop?
+--------------------------------------------------------
+
+Construct one ``TempStorage`` inside the kernel before the control flow when
+calls must reuse
+one allocation. Aliases of that descriptor are supported. Selecting between
+different descriptors at a runtime join is rejected, even when their
+capacities happen to match. A fresh descriptor created and used entirely
+inside one branch or loop iteration is also supported. Host-created
+descriptors can be used directly, but cannot be carried through runtime
+control flow.
+
+Let ``TempStorage()`` infer capacity unless an explicit limit is needed.
+A supplied capacity must fit both the device's shared-memory budget and the
+signed 32-bit byte-count representation. Shared-storage alignment must be a
+power of two no greater than 1024 bytes. A capacity smaller than the required
+allocation raises a compilation error.
+
+.. _coop-faq-floating-prefix:
+
+How do floating min/max and scan seeds handle NaN and infinity?
+---------------------------------------------------------------
+
+``min`` and ``max`` reductions use ``fmin``/``fmax`` semantics: a numeric
+operand wins over NaN, and an all-NaN contributing prefix produces NaN.
+``valid_items`` excludes later members' values while those members still
+participate. The ``np.minimum`` and ``np.maximum`` operator aliases select
+these same reduction semantics.
+
+For an exclusive floating scan, use a typed identity with the input dtype,
+for example ``np.float32(np.inf)`` for ``min`` or
+``cutlass.Float32(-math.inf)`` for ``max``. Matching typed NaN and infinity
+seeds are accepted. Plain Python numeric seeds must be finite and
+representable in the input dtype. The seed must be uniform within the group.
+
 .. _coop-faq-compiler-setup:
 
 Why does import work but kernel compilation fail?

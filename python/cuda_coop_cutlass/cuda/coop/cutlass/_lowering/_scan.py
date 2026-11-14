@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import math
 from typing import Any
 
 import numpy as np
@@ -57,6 +56,7 @@ from .._operators import (
     validate_operator_dtype,
 )
 from .._thread_data import ThreadData, _make_rmem_tensor
+from .._validation import _validate_output_region
 
 _provider_rendering = _rendering
 _provider_state = _state
@@ -816,11 +816,12 @@ def _typed_value(value, value_type, *, name="value", initial=False):
     ``value`` is converted to ``value_type``; ``name`` identifies errors.
     Python literals and NumPy values receive range checks. With
     ``initial=True``, NumPy and CuTe scalars must already have ``value_type``
-    and Python or NumPy floats must be finite. Tracing cannot see a runtime
+    and Python float literals must be finite. Tracing cannot see a runtime
     CuTe value, so an initial CuTe scalar is checked only for dtype.
     """
 
-    if isinstance(value, np.generic):
+    typed_numpy = isinstance(value, np.generic)
+    if typed_numpy:
         if (
             initial
             and _provider_types.canonical_dsl_type(value) is not value_type
@@ -830,14 +831,12 @@ def _typed_value(value, value_type, *, name="value", initial=False):
                 "value dtype"
             )
         value = value.item()
-    if initial and type(value) is float and (not math.isfinite(value)):
-        raise ValueError("cuda.coop.cutlass.scan initial_value must be finite")
     converted = _provider_types.coerce_plain_scalar(
         value,
         value_type,
         name=f"scan {name}",
         scope=_ROOT_SCOPE,
-        allow_nonfinite=not initial,
+        allow_nonfinite=not initial or typed_numpy,
     )
     if converted is not _provider_types._NOT_PLAIN_SCALAR:
         return converted
@@ -866,6 +865,7 @@ def _validate_aggregate_output(output, *, value_type):
         raise ValueError(
             "cuda.coop.cutlass.scan aggregate_output must contain one item"
         )
+    _validate_output_region(output, name="scan aggregate_output")
     if (
         output.dtype is not None
         and _provider_types.canonical_dsl_type(output.dtype) is not value_type

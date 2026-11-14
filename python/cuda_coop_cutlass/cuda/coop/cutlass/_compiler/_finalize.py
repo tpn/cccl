@@ -9,9 +9,18 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from cutlass.base_dsl.common import DSLRuntimeError
+from cutlass.base_dsl.common import DSLRuntimeError, DSLUserCodeError
 
-from . import _bundle, _cache, _lifetime, _rendering, _state, _storage, _target
+from . import (
+    _bundle,
+    _cache,
+    _convergence,
+    _lifetime,
+    _rendering,
+    _state,
+    _storage,
+    _target,
+)
 
 ROOT_SCOPE = "cuda.coop.cutlass"
 
@@ -100,7 +109,7 @@ def _trace_finalize_hook(dsl, module, function_name):
     operators = _rendering.bundle_device_operators(requests)
     for operator in operators:
         if operator.arch != arch:
-            raise DSLRuntimeError(
+            raise DSLUserCodeError(
                 f"{ROOT_SCOPE} device operator targets {operator.arch}, "
                 f"but this kernel targets {arch}; compile the operator "
                 "for the kernel's architecture."
@@ -126,6 +135,7 @@ def _trace_finalize_hook(dsl, module, function_name):
     )
     _storage.materialize_deferred_temp_storage_plans(plans)
     _lifetime.erase_temp_storage_lifetime_markers(session)
+    _convergence.lower_convergent_provider_calls(module, requests)
     _bundle.append_link_library_attr(module, path)
     for operator in operators:
         _bundle.append_link_library_attr(module, operator._materialize())

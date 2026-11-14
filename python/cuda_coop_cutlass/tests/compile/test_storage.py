@@ -152,3 +152,149 @@ def test_deferred_storage_extends_explicit_launch_size(requested):
             re.escape(value) + rf" = llvm.mlir.constant\({expected} : i64\)",
             host_ir,
         )
+
+
+@pytest.mark.parametrize(
+    "operation", ["implicit_sum", "sum", "reserve", "release"]
+)
+@pytest.mark.parametrize("branch", ["then", "else"])
+def test_runtime_conditional_expression_rejects_storage(operation, branch):
+    # This used to retain placeholders belonging to CuTe's erased speculative
+    # trace and segfault Python in finalization. Compilation must stop safely.
+    def value(storage):
+        if operation == "implicit_sum":
+            return coop.sum(coop.this_block(), cutlass.Int32(1))
+        if operation == "sum":
+            return coop.sum(
+                coop.this_block(), cutlass.Int32(1), temp_storage=storage
+            )
+        if operation == "reserve":
+            return storage.reserve(1, cutlass.Int32)[0]
+        return storage.release(cutlass.Int32)[0]
+
+    @cute.kernel
+    def kernel(flag: cutlass.Int32):
+        storage = coop.TempStorage(256, alignment=4)
+        if cutlass.const_expr(branch == "then"):
+            total = value(storage) if flag > 0 else cutlass.Int32(0)
+        else:
+            total = cutlass.Int32(0) if flag > 0 else value(storage)
+        cute.printf("%d", total)
+
+    @cute.jit
+    def launch(flag: cutlass.Int32):
+        kernel(flag).launch(grid=1, block=64)
+
+    with pytest.raises(Exception, match="use an if statement"):
+        cute.compile[(GPUArch("sm_80"),)](launch, cutlass.Int32(1))
+
+
+@pytest.mark.parametrize("control_flow", ["if", "for", "while"])
+@pytest.mark.parametrize("same_descriptor", [False, True])
+def test_storage_selection_preserves_identity_or_rejects(
+    control_flow, same_descriptor
+):
+    @cute.kernel
+    def kernel(flag: cutlass.Int32):
+        storage = coop.TempStorage(256, alignment=4)
+        original = storage
+        if cutlass.const_expr(control_flow == "if"):
+            if flag > 0:
+                if cutlass.const_expr(same_descriptor):
+                    storage = original
+                else:
+                    storage = coop.TempStorage(256, alignment=4)
+        elif cutlass.const_expr(control_flow == "for"):
+            for iteration in range(flag):
+                if cutlass.const_expr(same_descriptor):
+                    storage = original
+                else:
+                    storage = coop.TempStorage(256, alignment=4)
+                storage.reserve(64, cutlass.Int32)
+        else:
+            iteration = cutlass.Int32(0)
+            while iteration < flag:
+                if cutlass.const_expr(same_descriptor):
+                    storage = original
+                else:
+                    storage = coop.TempStorage(256, alignment=4)
+                storage.reserve(64, cutlass.Int32)
+                iteration += 1
+        view = storage.reserve(64, cutlass.Int32)
+        view[0] = cutlass.Int32(7)
+
+    @cute.jit
+    def launch(flag: cutlass.Int32):
+        kernel(flag).launch(grid=1, block=64)
+
+    if same_descriptor:
+        assert cute.compile[(GPUArch("sm_80"),)](launch, cutlass.Int32(2))
+    else:
+        with pytest.raises(Exception, match="different descriptor instances"):
+            cute.compile[(GPUArch("sm_80"),)](launch, cutlass.Int32(2))
+
+
+@pytest.mark.parametrize(
+    "argument", ["capacity", "reserve", "alignment", "combined", "undersized"]
+)
+def test_invalid_storage_request_rejected_before_allocation(argument):
+    @cute.kernel
+    def kernel():
+        if cutlass.const_expr(argument == "capacity"):
+            storage = coop.TempStorage((1 << 32) + 256)
+        elif cutlass.const_expr(argument == "undersized"):
+            storage = coop.TempStorage(1)
+        elif cutlass.const_expr(argument == "combined"):
+            first = coop.TempStorage(1 << 30)
+            second = coop.TempStorage(1 << 30)
+            first.reserve(1, cutlass.Int32)
+            second.reserve(1, cutlass.Int32)
+            storage = coop.TempStorage(1)
+        else:
+            storage = coop.TempStorage()
+        if cutlass.const_expr(argument == "undersized"):
+            storage.reserve(2, cutlass.Int32)
+        elif cutlass.const_expr(argument == "reserve"):
+            storage.reserve(1 << 30, cutlass.Int32)
+        elif cutlass.const_expr(argument == "alignment"):
+            storage.reserve(1, cutlass.Int32, alignment=2048)
+        else:
+            storage.release()
+
+    @cute.jit
+    def launch():
+        kernel().launch(grid=1, block=64)
+
+    diagnostic = {
+        "alignment": "must not exceed 1024",
+        "undersized": "capacity is smaller than its reservation",
+    }.get(argument, "signed 32-bit capacity")
+    with pytest.raises(Exception, match=diagnostic):
+        cute.compile[(GPUArch("sm_80"),)](launch)
+
+
+@pytest.mark.parametrize("select_at_runtime", [False, True])
+def test_host_storage_cannot_be_selected_by_runtime_control_flow(
+    select_at_runtime,
+):
+    first = coop.TempStorage(64, alignment=4)
+    second = coop.TempStorage(128, alignment=4, sharing="exclusive")
+
+    @cute.kernel
+    def kernel(flag: cutlass.Int32):
+        storage = first
+        if cutlass.const_expr(select_at_runtime):
+            if flag > 0:
+                storage = second
+        view = storage.reserve(16, cutlass.Int32)
+        view[0] = cutlass.Int32(7)
+
+    @cute.jit
+    def launch(flag: cutlass.Int32):
+        kernel(flag).launch(grid=1, block=32)
+
+    if select_at_runtime:
+        with pytest.raises(Exception, match="Host-created TempStorage"):
+            cute.compile[(GPUArch("sm_80"),)](launch, cutlass.Int32(1))
+    else:
+        assert cute.compile[(GPUArch("sm_80"),)](launch, cutlass.Int32(1))

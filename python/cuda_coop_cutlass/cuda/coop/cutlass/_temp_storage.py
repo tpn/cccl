@@ -7,12 +7,31 @@
 The descriptor holds compile-time policy and identity, not a device pointer.
 Finalization allocates storage after C++ layout probes establish its size.
 The MLIR hooks carry an analysis token through branches and loops, preserving
-aliases until finalization checks terminal release.
+aliases until finalization checks identity and terminal release.
 """
 
 from enum import Enum
 
 from ._validation import _normalize_alignment
+
+# Provider capacities and released extents use signed i32 operands.
+_MAX_STORAGE_SIZE_IN_BYTES = (1 << 31) - 1
+_MAX_STORAGE_ALIGNMENT = 1024
+
+
+def _validate_storage_size(size_in_bytes):
+    if size_in_bytes > _MAX_STORAGE_SIZE_IN_BYTES:
+        raise ValueError(
+            "TempStorage size_in_bytes must fit a signed 32-bit capacity "
+            f"(at most {_MAX_STORAGE_SIZE_IN_BYTES} bytes)."
+        )
+
+
+def _normalize_storage_alignment(alignment):
+    alignment = _normalize_alignment(alignment)
+    if alignment is not None and alignment > _MAX_STORAGE_ALIGNMENT:
+        raise ValueError("TempStorage alignment must not exceed 1024 bytes.")
+    return alignment
 
 
 class TempStorage:
@@ -28,9 +47,10 @@ class TempStorage:
     size_in_bytes : int or None
         Explicit positive capacity, or ``None`` to infer it from all uses,
         including reserved arrays.
-        An explicit capacity must cover the resolved allocation.
+        An explicit capacity must cover the resolved allocation and fit
+        a signed 32-bit integer. Device shared-memory limits still apply.
     alignment : int or None
-        Optional minimum byte alignment, expressed as a power of two. The
+        Optional minimum byte alignment, a power of two up to 1024. The
         planner also satisfies the C++ primitive's alignment requirement.
     auto_sync : bool
         Whether each scratch-using call emits a trailing block barrier.
@@ -46,6 +66,11 @@ class TempStorage:
     to share an allocation across calls in a kernel. Finalization validates
     descriptor lifetimes and supplies the storage operands. ``release``
     consumes the descriptor and returns its complete region as a native view.
+    Runtime branches and loops may carry aliases of the same kernel-local
+    descriptor;
+    selecting or rebinding to a different descriptor is rejected. Use an
+    ``if`` statement for conditional operations, with a condition uniform
+    across participating threads, rather than a runtime conditional expression.
     """
 
     def __init__(
@@ -67,8 +92,9 @@ class TempStorage:
                 raise ValueError(
                     "TempStorage size_in_bytes must be a positive integer."
                 )
+            _validate_storage_size(size_in_bytes)
 
-        alignment = _normalize_alignment(alignment)
+        alignment = _normalize_storage_alignment(alignment)
 
         if not isinstance(sharing, str) or isinstance(sharing, Enum):
             raise TypeError(
@@ -95,7 +121,19 @@ class TempStorage:
         self._identity_token = register_creation(self)
 
     def __extract_mlir_values__(self):
-        return [] if self._identity_token is None else [self._identity_token]
+        if self._identity_token is None:
+            from cutlass.base_dsl.common import DSLUserCodeError
+
+            from ._compiler import _state
+
+            if _state._active_trace_module_op() is not None:
+                raise DSLUserCodeError(
+                    "Host-created TempStorage cannot be carried through "
+                    "runtime control flow; construct the descriptor inside "
+                    "the kernel."
+                )
+            return []
+        return [self._identity_token]
 
     def __new_from_mlir_values__(self, values):
         if self._identity_token is None:

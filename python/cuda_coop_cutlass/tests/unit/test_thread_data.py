@@ -215,7 +215,7 @@ def test_control_flow_roundtrip(dtype, inferred):
             )
             original = tuple(data._values)
             values = data.__extract_mlir_values__()
-            assert len(values) == 2
+            assert len(values) == 3
             rebuilt = data.__new_from_mlir_values__(values)
             assert rebuilt is not data
             assert rebuilt.items_per_thread == 2
@@ -250,3 +250,53 @@ def test_control_flow_checks_lane_types():
         ThreadData(
             items_per_thread=2, values=[Int32(1), Uint32(2)]
         ).__extract_mlir_values__()
+
+
+@pytest.mark.parametrize("selector", [np.int32, np.dtype("int32"), int])
+def test_equivalent_dtype_selectors(selector):
+    data = ThreadData.from_values(Int32(7), dtype=Int32)
+    assert ThreadData.from_payload(data, dtype=selector) is data
+
+
+@pytest.mark.parametrize(
+    "selector,item,expected", [(int, True, 1), (float, np.float64(1.5), 1.5)]
+)
+def test_casting_constructor_normalizes_scalar_subclasses(
+    selector, item, expected
+):
+    data = ThreadData.from_fn(1, lambda _: item, dtype=selector)
+    assert type(data[0]) is selector
+    assert data[0] == expected
+
+
+@pytest.mark.parametrize(
+    "value,dtype,error",
+    [(300, np.int8, ValueError), (1.5, np.int32, TypeError)],
+)
+def test_export_rejects_values_that_conflict_with_metadata(value, dtype, error):
+    data = ThreadData.from_values(value, dtype=dtype)
+    with pytest.raises(error, match="not representable|dtype does not match"):
+        data.to_tensor_ssa()
+
+
+def test_export_rejects_conflicting_typed_items():
+    Float32 = import_module("cutlass.base_dsl.typing").Float32
+    with ir.Context(), ir.Location.unknown():
+        module = ir.Module.create()
+        with ir.InsertionPoint(module.body):
+            data = ThreadData.from_values(Float32(2.75), dtype=Int32)
+            with pytest.raises(TypeError, match="dtype does not match"):
+                data.to_register_tensor(dtype=Float32)
+
+
+def test_deepcopy_ir_values():
+    with ir.Context(), ir.Location.unknown():
+        module = ir.Module.create()
+        with ir.InsertionPoint(module.body):
+            value = Int32(Int32(7).ir_value())
+            data = ThreadData.from_values(value, dtype=Int32)
+            cloned = deepcopy(data)
+            assert cloned[0] is value
+            cloned[0] = Int32(9)
+            assert data[0] is value
+        assert module.operation.verify()
