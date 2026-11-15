@@ -1,6 +1,52 @@
 {
   "configurations": [
     {
+      "name": "cuda.coop CUTLASS: direct walkthrough",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-cutlass/bin/python",
+      "program": "${workspaceFolder}/docs/python/coop_cutlass/debugger_walkthrough.py",
+      "args": [
+        "--algorithm",
+        "direct"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/python/cuda_coop_cutlass",
+        "CUDA_COOP_CUTLASS_CCCL_ROOT": "${workspaceFolder}",
+        "CUDA_COOP_CUTLASS_SOURCE_DUMP_DIR": "${workspaceFolder}/build/coop-cutlass-debug-sources",
+        "CUDA_HOME": "/usr/local/cuda-13.3",
+        "CUDA_PATH": "/usr/local/cuda-13.3",
+        "PATH": "/usr/local/cuda-13.3/bin:${env:PATH}",
+        "CUDA_VISIBLE_DEVICES": "0"
+      }
+    },
+    {
+      "name": "cuda.coop CUTLASS: transpose walkthrough",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-cutlass/bin/python",
+      "program": "${workspaceFolder}/docs/python/coop_cutlass/debugger_walkthrough.py",
+      "args": [
+        "--algorithm",
+        "transpose"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/python/cuda_coop_cutlass",
+        "CUDA_COOP_CUTLASS_CCCL_ROOT": "${workspaceFolder}",
+        "CUDA_COOP_CUTLASS_SOURCE_DUMP_DIR": "${workspaceFolder}/build/coop-cutlass-debug-sources",
+        "CUDA_HOME": "/usr/local/cuda-13.3",
+        "CUDA_PATH": "/usr/local/cuda-13.3",
+        "PATH": "/usr/local/cuda-13.3/bin:${env:PATH}",
+        "CUDA_VISIBLE_DEVICES": "0"
+      }
+    },
+    {
       "cwd": "${workspaceFolder}",
       "initCommands": [
         "set cuda api_failures stop"
