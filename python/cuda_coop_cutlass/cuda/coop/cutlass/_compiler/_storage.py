@@ -31,6 +31,11 @@ from ._types import (
     ScratchLayout,
 )
 
+# Operand positions in cuda.launch_cfg.create and cuda.launch. The generated
+# dynamicSmemBytes and dynamicSmem properties are read-only.
+_LAUNCH_CFG_DYNAMIC_SMEM_INDEX = 3
+_LAUNCH_DYNAMIC_SMEM_INDEX = 6
+
 
 def _deferred_temp_storage_capability_error(
     cause: Exception | None = None,
@@ -505,20 +510,6 @@ def plan_deferred_temp_storage_events(
     return tuple(plans)
 
 
-def _replace_all_uses(old_value: Any, new_value: Any) -> None:
-    for method_name in ("replace_all_uses_with", "replaceAllUsesWith"):
-        replace = getattr(old_value, method_name, None)
-        if replace is None:
-            continue
-        try:
-            replace(new_value)
-            return
-        except Exception:  # noqa: BLE001, S112
-            # Try the alternate MLIR spelling before reporting incompatibility.
-            continue
-    _deferred_temp_storage_capability_error()
-
-
 def _include_deferred_storage_in_launches(plans) -> None:
     """Include deferred cooperative scratch in existing CuTe host launches.
 
@@ -609,10 +600,10 @@ def _include_deferred_storage_in_launches(plans) -> None:
                         "Deferred TempStorage requires a traced CUDA launch "
                         "configuration to account for its shared memory."
                     )
-                owner, index = config, 3  # dynamicSmemBytes
+                owner, smem_index = config, _LAUNCH_CFG_DYNAMIC_SMEM_INDEX
             else:
-                owner, index = launch, 6  # dynamicSmem
-            original = owner.operands[index]
+                owner, smem_index = launch, _LAUNCH_DYNAMIC_SMEM_INDEX
+            original = owner.operands[smem_index]
 
             def source(value):
                 while getattr(value.owner, "name", None) in (
@@ -680,8 +671,8 @@ def _include_deferred_storage_in_launches(plans) -> None:
                         )
             with ir.InsertionPoint(owner), owner.location:
                 inferred = cute.kernel_smem_size(launch.attributes["callee"])
-                owner.operands[index] = arith.maxsi(
-                    owner.operands[index], inferred
+                owner.operands[smem_index] = arith.maxsi(
+                    owner.operands[smem_index], inferred
                 )
 
 
@@ -719,6 +710,7 @@ def materialize_deferred_temp_storage_plans(
 
     required_capabilities = (
         getattr(ir.InsertionPoint, "at_block_begin", None),
+        getattr(ir.Value, "replace_all_uses_with", None),
         getattr(SmemAllocator, "allocate", None),
         getattr(Pointer, "to_llvm_ptr", None),
         getattr(arith, "constant", None),
@@ -743,19 +735,6 @@ def materialize_deferred_temp_storage_plans(
             kernel_groups[kernel_key] = (entry_block, [plan])
         else:
             existing_group[1].append(plan)
-        for binding in plan.bindings:
-            for placeholder in (
-                binding.event.smem_addr_placeholder,
-                binding.event.size_placeholder,
-            ):
-                if not any(
-                    callable(getattr(placeholder, method_name, None))
-                    for method_name in (
-                        "replace_all_uses_with",
-                        "replaceAllUsesWith",
-                    )
-                ):
-                    _deferred_temp_storage_capability_error()
 
     from .._temp_storage import _validate_storage_size
 
@@ -784,10 +763,11 @@ def materialize_deferred_temp_storage_plans(
                         )
                         smem_addr = arith.addi(base_addr, offset)
                     size = arith.constant(T.i32(), binding.size_in_bytes)
-                    _replace_all_uses(
-                        binding.event.smem_addr_placeholder,
-                        smem_addr,
+                    # Replace the address and capacity operands emitted while
+                    # tracing, now that the scratch allocation is known.
+                    binding.event.smem_addr_placeholder.replace_all_uses_with(
+                        smem_addr
                     )
-                    _replace_all_uses(binding.event.size_placeholder, size)
+                    binding.event.size_placeholder.replace_all_uses_with(size)
 
     _include_deferred_storage_in_launches(plans)
