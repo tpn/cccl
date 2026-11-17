@@ -17,49 +17,41 @@ CUB device functions into it.
 
    import cuda.coop.cutlass as coop
 
-The distribution is ``cuda-coop-cutlass``. It contributes the
-``cuda.coop.cutlass`` package to the shared ``cuda`` namespace; ``cuda.coop``
-is its namespace parent.
-
 Installation
 ------------
 
-The standalone package targets the CUTLASS 4.9 CuTe compiler integration and
-CUDA 13 on Linux. Install from a checkout containing this project:
+From the repository root, install the standalone package:
 
 .. code-block:: bash
 
    python -m pip install ./python/cuda_coop_cutlass
 
-Use a compatible CUDA driver and toolkit. NVRTC compiles the CUB providers,
-and the CuTe compiler must support external NVIDIA LTO-IR linking and
-trace-finalization hooks. The wheel includes the required CCCL headers and
-licenses. Runtime prerequisites are declared by the package metadata.
+Requirements
+~~~~~~~~~~~~
 
-This draft has been developed with a retained CUTLASS 4.9 candidate. Candidate
-validation and released-wheel installation are separate qualification gates;
-see the draft PR's validation record for the exact compiler and toolkit used.
-A public package release and package uploads are not part of this draft.
+* Python 3.10 or later.
+* CUDA 13 on Linux, with a compatible NVIDIA GPU and driver. NVRTC compiles
+  the CUB device functions.
+* CUTLASS CuTe DSL 4.9 with support for external NVIDIA LTO-IR linking and
+  trace-finalization hooks. See :ref:`compiler requirements
+  <coop-cutlass-compiler-requirements>` for the required interfaces.
 
-Start with the :doc:`Programming Guide <programming_guide>` for a complete
-prefix-sum kernel and :doc:`concepts` for participation, layouts, ownership,
-and storage. The :doc:`examples` page shows executable programs with CPU
-reference checks and downloads. The :doc:`API reference <api>` lists every operation and
-its controls. Developers new to CUTLASS can read :doc:`cutlass_primer`
-before the :doc:`Developer Guide <developer_guide>`.
+The wheel includes the required CCCL headers and licenses. Python runtime
+dependencies are declared in the package metadata.
+
+Documentation
+-------------
 
 .. toctree::
    :maxdepth: 2
 
-   concepts
    programming_guide
-   api
    examples
-   tensor_memory_topk
-   developer_guide
-   cutlass_primer
-   cutlass_integration_example
+   concepts
+   api
+   advanced
    configuration
    faqs
    glossary
    visualizations/index
+   developer_guide
