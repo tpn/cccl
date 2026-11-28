@@ -25,11 +25,18 @@ CUB_NAMESPACE_BEGIN
 
 namespace detail
 {
-// The warp policies use AIR for unhandled input shapes and operations.
+//! @brief Algorithm used for block-level top-k selection.
+//!
+//! The warp policies apply to partial-tile maximum selection on float keys with int values,
+//! with 64 threads, two items per thread, and ``1 <= k <= 32`` and ``k < num_valid <= 96``.
+//! All other inputs and operations use AIR.
 enum class block_topk_algorithm
 {
+  //! Select the cutoff by radix histogramming.
   air,
+  //! Select the cutoff with a warp sorting network.
   warp_select,
+  //! For k < 32, try zero as the cutoff before running the warp sorting network.
   warp_select_with_zero_check
 };
 

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 // SPDX-License-Identifier: BSD-3
 
+#include <cuda/std/bit>
+
 #include <string>
 
 #include <cuda.h>
@@ -50,6 +52,7 @@ CUB_TEST_CASE("Test nvrtc", "[test][nvrtc]", CUB_SMALL)
     #include <cub/block/block_scan.cuh>
     #include <cub/block/block_shuffle.cuh>
     #include <cub/block/block_store.cuh>
+    #include <cub/block/block_topk.cuh>
     #include <cub/block/radix_rank_sort_operations.cuh>
     #include <cub/device/dispatch/kernels/kernel_reduce.cuh>
     #include <cub/device/dispatch/kernels/kernel_for_each.cuh>
@@ -280,6 +283,25 @@ CUB_TEST_CASE("Test nvrtc", "[test][nvrtc]", CUB_SMALL)
       // Test block store
       block_store_t(block_store_storage).Store(ptr, items);
     }
+
+    extern "C" __global__ void test_block_topk(int* output)
+    {
+      using topk_t =
+        cub::detail::block_topk<float, 64, 2, int, cub::detail::block_topk_algorithm::warp_select_with_zero_check>;
+      __shared__ topk_t::TempStorage storage;
+      const int first = static_cast<int>(threadIdx.x) * 2;
+      // The second tile has exactly k nonnegative keys. Both tiles select input positions 62 through 92.
+      const int shift = blockIdx.x == 0 ? 0 : 62;
+      int values[2] = {first, first + 1};
+      float keys[2] = {static_cast<float>(first - shift), static_cast<float>(first + 1 - shift)};
+      topk_t(storage).max_pairs<false>(keys, values, 31, 93);
+      for (int i = 0; i < 2 && first + i < 31; ++i)
+      {
+        const int out = 2 * (blockIdx.x * 31 + first + i);
+        output[out] = __float_as_int(keys[i]);
+        output[out + 1] = values[i];
+      }
+    }
 )asdf";
   const char* name = "test";
 
@@ -358,6 +380,27 @@ CUB_TEST_CASE("Test nvrtc", "[test][nvrtc]", CUB_SMALL)
     const int actual   = h_ptr[i];
     const int expected = tile_size - i - 1;
     REQUIRE(actual == expected);
+  }
+
+  CUfunction topk_kernel{};
+  REQUIRE(CUDA_SUCCESS == cuModuleGetFunction(&topk_kernel, module, "test_block_topk"));
+  void* topk_args[] = {&d_ptr};
+  REQUIRE(CUDA_SUCCESS == cuLaunchKernel(topk_kernel, 2, 1, 1, 64, 1, 1, 0, nullptr, topk_args, nullptr));
+  REQUIRE(CUDA_SUCCESS == cuCtxSynchronize());
+  REQUIRE(CUDA_SUCCESS == cuMemcpyDtoH(h_ptr, d_ptr, 2 * 31 * 2 * sizeof(int)));
+  for (int tile = 0; tile < 2; ++tile)
+  {
+    bool seen[31]{};
+    for (int i = 0; i < 31; ++i)
+    {
+      const int out   = 2 * (31 * tile + i);
+      const int index = h_ptr[out + 1];
+      REQUIRE(index >= 62);
+      REQUIRE(index < 93);
+      REQUIRE_FALSE(seen[index - 62]);
+      seen[index - 62] = true;
+      REQUIRE(cuda::std::bit_cast<float>(h_ptr[out]) == static_cast<float>(index - 62 * tile));
+    }
   }
 
   REQUIRE(CUDA_SUCCESS == cuMemFree(d_ptr));

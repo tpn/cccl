@@ -31,8 +31,10 @@
 CUB_NAMESPACE_BEGIN
 namespace detail
 {
-// Select the largest k pairs from at most three warps' worth of blocked input in a 64 x 2 tile.
-// The network finds the cutoff using keys alone. Compaction moves each winning payload just once.
+//! @brief Select the largest k float keys and their int values from a partial 64-thread tile.
+//!
+//! Each thread holds two consecutive input pairs in blocked order. The network finds the cutoff
+//! using keys alone, then compacts the winning pairs into the first k blocked slots in unspecified order.
 class block_topk_warp_select
 {
   using bits_t = ::cuda::std::uint32_t;
@@ -67,7 +69,7 @@ private:
 
   [[nodiscard]] _CCCL_DEVICE_API _CCCL_FORCEINLINE static bits_t warp_min(bits_t value)
   {
-    if (const auto result = detail::warp_redux(value, ~0u, ::cuda::minimum<>{}))
+    if (const auto result = _CUB::detail::warp_redux(value, ~0u, ::cuda::minimum<>{}))
     {
       return *result;
     }
@@ -126,10 +128,14 @@ private:
   }
 
 public:
+  //! @pre All 64 threads in the one-dimensional block must participate with the same k and num_valid.
+  //!      The valid input is the first num_valid blocked slots, with ``1 <= k <= 32`` and ``k < num_valid <= 96``.
+  //! @smemreuse
   template <bool CheckZero>
   _CCCL_DEVICE_API _CCCL_FORCEINLINE static void
   select_pairs(TempStorage& storage, float (&keys)[2], int (&values)[2], int k, int num_valid)
   {
+    _CCCL_ASSERT(supports(k, num_valid), "warp selection requires 1 <= k <= 32 and k < num_valid <= 96");
     const int tid      = static_cast<int>(threadIdx.x);
     const int lane     = tid % warp_threads;
     const bits_t prior = ::cuda::ptx::get_sreg_lanemask_lt();
@@ -146,8 +152,8 @@ public:
       }
     }
 
-    const bits_t first_rank  = topk::twiddle_in_bits<float, true>(first.bits);
-    const bits_t second_rank = topk::twiddle_in_bits<float, true>(second.bits);
+    const bits_t first_rank  = _CUB::detail::topk::twiddle_in_bits<float, true>(first.bits);
+    const bits_t second_rank = _CUB::detail::topk::twiddle_in_bits<float, true>(second.bits);
     bits_t kept{};
     if (tid < warp_threads)
     {
@@ -170,7 +176,8 @@ public:
       const pair odd         = ::cuda::device::warp_shuffle_idx(second, lane / 2);
       const pair item        = (lane & 1) == 0 ? even : odd;
       storage.original[lane] = item;
-      storage.sorted[lane]   = sort_column(topk::twiddle_in_bits<float, true>(item.bits), ::cuda::std::less<>{});
+      storage.sorted[lane] =
+        sort_column(_CUB::detail::topk::twiddle_in_bits<float, true>(item.bits), ::cuda::std::less<>{});
     }
     __syncthreads();
 
@@ -178,12 +185,12 @@ public:
     {
       // For descending runs A and B, max(A[i], B[k-1-i]) for 0 <= i < k gives
       // the k winners in unspecified order. B is stored ascending here.
-      const bits_t peer    = storage.sorted[(lane + warp_threads - k) % warp_threads];
-      const bits_t winner  = (::cuda::std::max) (kept, peer);
-      const bits_t cutoff  = warp_min(lane < k ? winner : ~bits_t{0});
-      const pair inputs[]  = {first, second, storage.original[lane]};
-      const bits_t ranks[] = {first_rank, second_rank, topk::twiddle_in_bits<float, true>(inputs[2].bits)};
-      const bool valid[]   = {2 * lane < num_valid, 2 * lane + 1 < num_valid, 2 * warp_threads + lane < num_valid};
+      const bits_t peer   = storage.sorted[(lane + warp_threads - k) % warp_threads];
+      const bits_t winner = (::cuda::std::max) (kept, peer);
+      const bits_t cutoff = warp_min(lane < k ? winner : ~bits_t{0});
+      const pair inputs[] = {first, second, storage.original[lane]};
+      const bits_t ranks[] = {first_rank, second_rank, _CUB::detail::topk::twiddle_in_bits<float, true>(inputs[2].bits)};
+      const bool valid[] = {2 * lane < num_valid, 2 * lane + 1 < num_valid, 2 * warp_threads + lane < num_valid};
       bits_t greater[3], equal[3];
       int num_greater = 0;
       _CCCL_PRAGMA_UNROLL_FULL()

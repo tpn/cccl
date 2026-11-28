@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include <device_side_benchmark.cuh>
 #include <nvbench_helper.cuh>
 
 using algorithm = cub::detail::block_topk_algorithm;
@@ -44,31 +45,59 @@ inline constexpr int block_threads = 64;
 inline constexpr int thread_items  = 2;
 inline constexpr int tile_items    = block_threads * thread_items;
 
-template <algorithm Algorithm, int K, int ValidItems>
-__global__ void select_pairs(const float* input, float* scores, int* indices)
+template <algorithm Algorithm, int K, int ValidItems, int Iterations>
+__global__ void select_pairs(const float* input, float* scores, int* indices, unsigned mask_stride)
 {
   using block_topk = cub::detail::block_topk<float, block_threads, thread_items, int, Algorithm>;
   __shared__ typename block_topk::TempStorage storage;
 
-  float keys[thread_items];
-  int values[thread_items];
   const auto tile = static_cast<cuda::std::int64_t>(blockIdx.x);
+  float original[thread_items];
   for (int i = 0; i < thread_items; ++i)
   {
-    const int slot = threadIdx.x * thread_items + i;
-    keys[i]        = input[tile * tile_items + slot];
-    values[i]      = slot;
+    original[i] = input[tile * tile_items + threadIdx.x * thread_items + i];
   }
 
-  block_topk{storage}.template max_pairs<false>(keys, values, K, ValidItems);
-
-  for (int i = 0; i < thread_items; ++i)
+#pragma unroll 1
+  for (int iter = 0; iter < Iterations; ++iter)
   {
-    const int slot = threadIdx.x * thread_items + i;
-    if (slot < K)
+    float keys[thread_items];
+    int values[thread_items];
+    for (int i = 0; i < thread_items; ++i)
     {
-      scores[tile * K + slot]  = keys[i];
-      indices[tile * K + slot] = values[i];
+      keys[i]   = original[i];
+      values[i] = threadIdx.x * thread_items + i;
+      if constexpr (Iterations > 1)
+      {
+        // The caller passes zero. Keeping the mask opaque to device compilation forces key normalization
+        // and ranking to run on every iteration while preserving the exact input pairs.
+        const unsigned mask = iter * mask_stride;
+        keys[i]             = cuda::std::bit_cast<float>(cuda::std::bit_cast<unsigned>(keys[i]) ^ mask);
+        values[i]           = static_cast<int>(static_cast<unsigned>(values[i]) ^ mask);
+      }
+    }
+
+    block_topk{storage}.template max_pairs<false>(keys, values, K, ValidItems);
+    for (int i = 0; i < thread_items; ++i)
+    {
+      const int slot = threadIdx.x * thread_items + i;
+      if (slot < K)
+      {
+        if constexpr (Iterations == 1)
+        {
+          scores[tile * K + slot]  = keys[i];
+          indices[tile * K + slot] = values[i];
+        }
+        else
+        {
+          sink(keys[i]);
+          sink(values[i]);
+        }
+      }
+    }
+    if constexpr (Iterations > 1)
+    {
+      __syncthreads(); // All lanes must finish reading the shared output before the next selection reuses it.
     }
   }
 }
@@ -114,6 +143,32 @@ std::vector<float> make_input(cuda::std::int64_t tiles, int k, int valid_items, 
   return input;
 }
 
+template <algorithm Algorithm, int K, int ValidItems, int Iterations, typename ExecTag>
+void run_pairs(nvbench::state& state, cuda::std::int64_t tiles, ExecTag exec_tag)
+{
+  const auto host = make_input(tiles, K, ValidItems, state.get_string("Distribution"));
+  thrust::device_vector<float> input(host.begin(), host.end());
+  const auto output_size = Iterations == 1 ? tiles * K : 0;
+  thrust::device_vector<float> scores(output_size, thrust::no_init);
+  thrust::device_vector<int> indices(output_size, thrust::no_init);
+
+  const float* in = thrust::raw_pointer_cast(input.data());
+  float* out      = thrust::raw_pointer_cast(scores.data());
+  int* idx        = thrust::raw_pointer_cast(indices.data());
+
+  state.add_element_count(tiles * ValidItems * Iterations);
+  state.add_global_memory_reads<float>(tiles * tile_items);
+  if constexpr (Iterations == 1)
+  {
+    state.add_global_memory_writes<float>(tiles * K, "Scores");
+    state.add_global_memory_writes<int>(tiles * K, "Indices");
+  }
+  state.exec(exec_tag, [&](nvbench::launch& launch) {
+    select_pairs<Algorithm, K, ValidItems, Iterations>
+      <<<static_cast<int>(tiles), block_threads, 0, launch.get_stream()>>>(in, out, idx, 0u);
+  });
+}
+
 template <algorithm Algorithm, int K, int ValidItems>
 void pairs(nvbench::state& state,
            nvbench::type_list<nvbench::enum_type<Algorithm>, nvbench::enum_type<K>, nvbench::enum_type<ValidItems>>)
@@ -124,29 +179,26 @@ void pairs(nvbench::state& state,
     state.skip("Tile count must fit the grid's x dimension.");
     return;
   }
-  const auto host = make_input(tiles, K, ValidItems, state.get_string("Distribution"));
-  thrust::device_vector<float> input(host.begin(), host.end());
-  thrust::device_vector<float> scores(tiles * K, thrust::no_init);
-  thrust::device_vector<int> indices(tiles * K, thrust::no_init);
+  // Time complete tile selections and their score/index stores, with warm-cache batched timings.
+  run_pairs<Algorithm, K, ValidItems, 1>(state, tiles, nvbench::exec_tag::gpu);
+}
 
-  const float* in = thrust::raw_pointer_cast(input.data());
-  float* out      = thrust::raw_pointer_cast(scores.data());
-  int* idx        = thrust::raw_pointer_cast(indices.data());
-
-  state.add_element_count(tiles * ValidItems);
-  state.add_global_memory_reads<float>(tiles * tile_items);
-  state.add_global_memory_writes<float>(tiles * K, "Scores");
-  state.add_global_memory_writes<int>(tiles * K, "Indices");
-  // Time complete tile selections, including their score/index stores. Replaying the same
-  // read-only inputs also lets NVBench measure the short kernels with warm caches.
-  state.exec(nvbench::exec_tag::gpu, [&](nvbench::launch& launch) {
-    select_pairs<Algorithm, K, ValidItems>
-      <<<static_cast<int>(tiles), block_threads, 0, launch.get_stream()>>>(in, out, idx);
-  });
+template <algorithm Algorithm>
+void register_pairs(nvbench::state& state, nvbench::type_list<nvbench::enum_type<Algorithm>>)
+{
+  // Repeated collective latency on a single block and throughput across a full grid of 64-thread blocks.
+  const int tiles = state.get_string("Mode") == "latency" ? 1 : 32 * state.get_device().value().get_number_of_sms();
+  run_pairs<Algorithm, 31, 93, 64>(state, tiles, nvbench::exec_tag::gpu | nvbench::exec_tag::no_batch);
 }
 
 NVBENCH_BENCH_TYPES(pairs, NVBENCH_TYPE_AXES(algorithms, k_values, valid_counts))
   .set_name("base")
   .set_type_axes_names({"Algorithm{ct}", "K{ct}", "ValidItems{ct}"})
   .add_int64_axis("Tiles{io}", {4096})
+  .add_string_axis("Distribution", {"normal", "sign_separated", "common_prefix", "positive_separated"});
+
+NVBENCH_BENCH_TYPES(register_pairs, NVBENCH_TYPE_AXES(algorithms))
+  .set_name("registers")
+  .set_type_axes_names({"Algorithm{ct}"})
+  .add_string_axis("Mode", {"latency", "throughput"})
   .add_string_axis("Distribution", {"normal", "sign_separated", "common_prefix", "positive_separated"});
