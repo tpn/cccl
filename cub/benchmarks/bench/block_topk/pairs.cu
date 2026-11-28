@@ -186,8 +186,10 @@ void pairs(nvbench::state& state,
 template <algorithm Algorithm>
 void register_pairs(nvbench::state& state, nvbench::type_list<nvbench::enum_type<Algorithm>>)
 {
-  // Repeated collective latency on a single block and throughput across a full grid of 64-thread blocks.
-  const int tiles = state.get_string("Mode") == "latency" ? 1 : 32 * state.get_device().value().get_number_of_sms();
+  // Give every policy the same number of tiles for throughput comparisons.
+  const bool latency = state.get_string("Mode") == "latency";
+  const int tiles =
+    latency ? 1 : 32 * state.get_device().value().get_number_of_sms(); // NOLINT(bugprone-unchecked-optional-access)
   run_pairs<Algorithm, 31, 93, 64>(state, tiles, nvbench::exec_tag::gpu | nvbench::exec_tag::no_batch);
 }
 
