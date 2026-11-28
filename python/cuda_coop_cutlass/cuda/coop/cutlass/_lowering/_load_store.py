@@ -53,7 +53,7 @@ from .._compiler import _rendering, _state, _types
 from .._compiler._types import ALL_PROVIDER_TYPES, TYPE_SPECIFICATIONS
 from .._thread_data import ThreadData, _make_rmem_tensor
 from .._thread_group import ThreadGroup
-from ._load_store_layout import contiguous_layout_reason, static_layout_elements
+from ._load_store_layout import contiguous_layout_extent
 
 _ROOT_SCOPE = "cuda.coop.cutlass"
 _MAX_STATIC_OFFSET = (1 << 63) - 1
@@ -896,7 +896,7 @@ def _pointer_metadata_reason(
 
 
 def _try_raw_memory_pointer(
-    value: Any, value_type: type
+    value: Any, value_type: type, *, direct_only: bool = False
 ) -> tuple[Any | None, str]:
     """Extract a raw generic, global, or CTA shared pointer."""
 
@@ -919,7 +919,7 @@ def _try_raw_memory_pointer(
     reason = _pointer_metadata_reason(candidates, value_type)
     if reason is not None:
         return None, reason
-    for candidate in candidates:
+    for candidate in candidates[:1] if direct_only else candidates:
         to_llvm_ptr = getattr(candidate, "to_llvm_ptr", None)
         if callable(to_llvm_ptr):
             pointer = to_llvm_ptr()
@@ -960,14 +960,16 @@ def _contiguous_memory_proof(
     promise an IR-free inspection.
     """
 
-    layout_reason = contiguous_layout_reason(value)
+    available_elements, layout_reason = contiguous_layout_extent(value)
     if layout_reason is not None:
         return None, layout_reason
-    pointer, reason = _try_raw_memory_pointer(value, value_type)
+    pointer, reason = _try_raw_memory_pointer(
+        value, value_type, direct_only=available_elements is None
+    )
     if pointer is None:
         return None, reason
     return (
-        _ContiguousMemoryProof(pointer, static_layout_elements(value)),
+        _ContiguousMemoryProof(pointer, available_elements),
         "raw pointer and compact layout proven",
     )
 

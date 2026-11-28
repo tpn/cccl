@@ -24,6 +24,17 @@ import cuda.coop.cutlass as coop
 pytestmark = [pytest.mark.backend_cutlass, pytest.mark.compile]
 
 
+class _DynamicPointerAdapter:
+    def __init__(self, memory):
+        self.dtype = memory.dtype
+        self._address = memory.llvm_ptr
+
+    def __getattr__(self, name):
+        if name == "llvm_ptr":
+            return self._address
+        raise AttributeError(name)
+
+
 @pytest.mark.parametrize(
     "algorithm",
     (
@@ -183,6 +194,7 @@ def test_invalid_movement_inputs(case, message):
         ("swizzled-pointer", "swizzled pointer"),
         ("swizzled-tensor", "swizzled pointer"),
         ("composed", "composed layout"),
+        ("missing-layout", "does not expose a raw iterator/pointer"),
         ("alignment", "element alignment"),
         ("cmem", "unsupported address space"),
         ("tmem", "unsupported address space"),
@@ -200,6 +212,9 @@ def test_rejects_memory_that_cannot_be_accessed_linearly(case, diagnostic):
             pointer = cute.recast_ptr(memory, cute.make_swizzle(1, 4, 3))
             view = cute.make_tensor(pointer, cute.make_layout(64))
             coop.store(block, view, cutlass.Int32(1))
+        elif cutlass.const_expr(case == "missing-layout"):
+            view = SimpleNamespace(dtype=memory.dtype, iterator=memory)
+            coop.load(block, view, items_per_thread=1)
         elif cutlass.const_expr(case == "composed"):
             layout = cute.make_composed_layout(
                 cute.make_swizzle(1, 4, 3), 0, cute.make_layout(64)
@@ -230,7 +245,8 @@ def test_rejects_memory_that_cannot_be_accessed_linearly(case, diagnostic):
 
 
 @pytest.mark.parametrize(
-    "operand", ("pointer", "offset-pointer", "llvm-pointer", "tensor")
+    "operand",
+    ("pointer", "offset-pointer", "llvm-pointer", "dynamic-pointer", "tensor"),
 )
 @pytest.mark.parametrize(
     "dtype,value_type",
@@ -261,6 +277,8 @@ def test_declared_memory_dtype(operand, dtype, value_type):
             target = SimpleNamespace(
                 dtype=memory.dtype, llvm_ptr=memory.llvm_ptr
             )
+        elif cutlass.const_expr(operand == "dynamic-pointer"):
+            target = _DynamicPointerAdapter(memory)
         elif cutlass.const_expr(operand == "offset-pointer"):
             target = memory + 32
         else:
