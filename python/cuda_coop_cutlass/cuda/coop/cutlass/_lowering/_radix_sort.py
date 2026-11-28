@@ -105,10 +105,9 @@ def _bit_binding(value, name):
 def _plan(group, launch, operation, temp_storage=None):
     """Require a supported block plan and attach exact scratch controls.
 
-    Reject tiles above CUB's 65,535-item counter limit. Record descriptor
-    size, alignment, sharing, and reuse policy so deferred allocation can
-    satisfy the C++ layout. Rank owns its scratch and always synchronizes
-    after use.
+    Record descriptor size, alignment, sharing, and reuse policy so deferred
+    allocation can satisfy the C++ layout. Rank owns its scratch and always
+    synchronizes after use.
     """
 
     plan = plan_group_primitive(
@@ -118,13 +117,6 @@ def _plan(group, launch, operation, temp_storage=None):
         ),
         launch,
     ).require_supported()
-    if (
-        operation.primitive.items_per_thread * launch.exact_block_threads
-        > 65535
-    ):
-        raise ValueError(
-            "CUB radix operations require at most 65535 items per block"
-        )
     return replace(
         plan,
         temp_storage=replace(

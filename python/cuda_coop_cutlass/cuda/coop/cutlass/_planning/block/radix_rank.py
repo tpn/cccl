@@ -35,6 +35,7 @@ from .radix import (
     RadixOrder,
     make_radix_bit_range,
     normalize_radix_order,
+    validate_radix_tile_size,
 )
 
 _KEY_T = Dependency("KeyT")
@@ -363,6 +364,7 @@ def make_block_radix_rank_specialization(
             bins_per_thread if with_exclusive_digit_prefix else None
         ),
     )
+    validate_radix_tile_size(block_dim, call.items_per_thread)
     runtime_begin = not bit_range.is_static
     specialization = Algorithm(
         struct_name="CudaCoopBlockRadixRank"

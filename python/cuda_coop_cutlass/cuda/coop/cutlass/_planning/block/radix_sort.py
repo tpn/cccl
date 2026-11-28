@@ -39,6 +39,7 @@ from .radix import (
     RadixOrder,
     make_radix_bit_range,
     normalize_radix_order,
+    validate_radix_tile_size,
 )
 
 
@@ -413,6 +414,7 @@ def make_block_radix_sort_specialization(
         key_bit_width=key_bit_width,
         bit_policy=bit_policy,
     )
+    validate_radix_tile_size(block_dim, call.items_per_thread)
     specialization = Algorithm(
         struct_name="CudaCoopBlockRadixSort"
         if call.bit_policy.includes_explicit

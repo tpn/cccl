@@ -19,7 +19,18 @@ from typing import Any
 
 from .._bindings import ArgumentBinding, BindingKind, binding
 from .._symbols import semantic_token
-from ._common import normalize_boolean_option
+from ._common import checked_tile_size, normalize_boolean_option
+
+
+def validate_radix_tile_size(
+    block_dim: tuple[int, int, int], items_per_thread: int
+) -> None:
+    """Check CUB's signed indices and 16-bit radix digit counters."""
+
+    if checked_tile_size(block_dim, items_per_thread) > 65535:
+        raise ValueError(
+            "CUB radix operations require at most 65535 items per block"
+        )
 
 
 class RadixOrder(str, Enum):
@@ -248,6 +259,7 @@ __all__ = [
     "make_radix_bit_range",
     "normalize_radix_order",
     "resolve_static_radix_end_bit",
+    "validate_radix_tile_size",
 ]
 
 

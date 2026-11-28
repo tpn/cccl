@@ -27,6 +27,10 @@ from cuda.coop.cutlass._planning import (
     this_block,
     this_warp,
 )
+from cuda.coop.cutlass._planning.block import (
+    make_block_radix_rank_specialization,
+    make_block_radix_sort_specialization,
+)
 
 pytestmark = [pytest.mark.backend_cutlass, pytest.mark.unit]
 
@@ -62,6 +66,28 @@ def _rank(**kwargs):
     }
     options.update(kwargs)
     return _radix_sort._CubRadixRequest(_radix_sort._rank_plan(**options))
+
+
+@pytest.mark.parametrize(
+    "factory",
+    (
+        make_block_radix_rank_specialization,
+        make_block_radix_sort_specialization,
+    ),
+)
+def test_radix_tile_limits(factory):
+    options = dict(key_dtype=cutlass.Int32, begin_bit=0, end_bit=4)
+    factory(block_dim=(3, 5, 17), items_per_thread=257, **options)
+    with pytest.raises(ValueError, match="at most 65535 items"):
+        factory(block_dim=(8, 4, 2), items_per_thread=1024, **options)
+    with pytest.raises(ValueError, match="signed 32-bit integer"):
+        factory(block_dim=(8, 4, 1), items_per_thread=1 << 26, **options)
+
+
+@pytest.mark.parametrize("factory", (_rank, _sort))
+def test_lowering_enforces_radix_counter_limit(factory):
+    with pytest.raises(ValueError, match="at most 65535 items"):
+        factory(items=1024)
 
 
 @pytest.mark.parametrize("dtype", tuple(_radix_sort._SORT_KEYS))
