@@ -120,7 +120,20 @@ if (CUDA_COOP_CUTLASS_INSTALL_HEADER_BUNDLE)
       ERROR_QUIET
       OUTPUT_STRIP_TRAILING_WHITESPACE
     )
-    if (NOT "${_cuda_coop_cutlass_header_status_result}" STREQUAL "0")
+    # Git status can omit working-tree changes to these index entries.
+    # ls-files quotes embedded newlines, so every output line starts with a tag.
+    execute_process(
+      COMMAND
+        git -C "${CCCL_SOURCE_DIR}" ls-files -v --
+        ${_cuda_coop_cutlass_bundle_input_pathspecs}
+      RESULT_VARIABLE _cuda_coop_cutlass_index_result
+      OUTPUT_VARIABLE _cuda_coop_cutlass_index_entries
+      ERROR_QUIET
+    )
+    if (
+      NOT "${_cuda_coop_cutlass_header_status_result}" STREQUAL "0"
+      OR NOT "${_cuda_coop_cutlass_index_result}" STREQUAL "0"
+    )
       set(_cuda_coop_cutlass_header_bundle_unverified ON)
       set(
         _cuda_coop_cutlass_header_bundle_diagnostic
@@ -132,6 +145,12 @@ if (CUDA_COOP_CUTLASS_INSTALL_HEADER_BUNDLE)
         _cuda_coop_cutlass_header_bundle_diagnostic
         "The CCCL header bundle inputs contain local changes"
       )
+    elseif (_cuda_coop_cutlass_index_entries MATCHES "(^|\n)[a-zS] ")
+      set(_cuda_coop_cutlass_header_bundle_unverified ON)
+      set(
+        _cuda_coop_cutlass_header_bundle_diagnostic
+        "CCCL header bundle inputs have assume-unchanged or skip-worktree flags"
+      )
     endif()
   elseif (EXISTS "${CCCL_SOURCE_DIR}/.git")
     set(_cuda_coop_cutlass_header_bundle_unverified ON)
@@ -141,6 +160,7 @@ if (CUDA_COOP_CUTLASS_INSTALL_HEADER_BUNDLE)
     )
   endif()
 
+  set(_requested_revision "${CUDA_COOP_CUTLASS_CCCL_SOURCE_REVISION}")
   if (_cuda_coop_cutlass_header_bundle_unverified)
     if (NOT CUDA_COOP_CUTLASS_ALLOW_DIRTY_HEADER_BUNDLE)
       message(
@@ -156,11 +176,6 @@ if (CUDA_COOP_CUTLASS_INSTALL_HEADER_BUNDLE)
       "${_cuda_coop_cutlass_header_bundle_diagnostic}; recording an unknown CCCL "
       "source revision"
     )
-  elseif (CUDA_COOP_CUTLASS_CCCL_SOURCE_REVISION)
-    set(
-      _cuda_coop_cutlass_source_revision
-      "${CUDA_COOP_CUTLASS_CCCL_SOURCE_REVISION}"
-    )
   elseif (_cuda_coop_cutlass_source_is_worktree_root)
     execute_process(
       COMMAND git -C "${CCCL_SOURCE_DIR}" rev-parse HEAD
@@ -169,6 +184,17 @@ if (CUDA_COOP_CUTLASS_INSTALL_HEADER_BUNDLE)
       ERROR_QUIET
       OUTPUT_STRIP_TRAILING_WHITESPACE
     )
+    if (
+      NOT _requested_revision STREQUAL ""
+      AND NOT _requested_revision STREQUAL _cuda_coop_cutlass_source_revision
+    )
+      message(
+        FATAL_ERROR
+        "CUDA_COOP_CUTLASS_CCCL_SOURCE_REVISION must match the full Git HEAD commit"
+      )
+    endif()
+  elseif (NOT _requested_revision STREQUAL "")
+    set(_cuda_coop_cutlass_source_revision "${_requested_revision}")
   elseif (
     EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/_cccl"
     AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cccl-bundle-provenance.json"

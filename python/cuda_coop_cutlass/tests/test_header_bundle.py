@@ -272,8 +272,11 @@ def test_changed_header_bundle_fails_closed(
     assert "CUDA_COOP_CUTLASS_ALLOW_DIRTY_HEADER_BUNDLE=ON" in diagnostic
 
 
+@pytest.mark.parametrize(
+    "index_flag", [None, "--assume-unchanged", "--skip-worktree"]
+)
 def test_allow_dirty_header_bundle_forces_unknown_provenance(
-    tmp_path: Path,
+    tmp_path: Path, index_flag: str | None
 ) -> None:
     _require_packaging_tools()
 
@@ -284,10 +287,26 @@ def test_allow_dirty_header_bundle_forces_unknown_provenance(
     header.write_text("// original\n", encoding="utf-8")
     git_env = _isolated_git_env()
     _initialize_git_repository(source_root, git_env)
+    if index_flag:
+        subprocess.run(
+            [
+                "git",
+                "update-index",
+                index_flag,
+                header.relative_to(source_root),
+            ],
+            cwd=source_root,
+            env=git_env,
+            check=True,
+        )
     header.write_text("// modified\n", encoding="utf-8")
 
     claimed_revision = "1" * 40
     build_root = tmp_path / "build"
+    if index_flag:
+        result = _configure_cuda_coop(package_root, build_root, git_env)
+        assert result.returncode != 0
+        assert "assume-unchanged or skip-worktree" in result.stderr
     result = _configure_cuda_coop(
         package_root,
         build_root,
@@ -316,6 +335,31 @@ def test_unrelated_dirty_file_preserves_head_revision(tmp_path: Path) -> None:
     result.check_returncode()
 
     assert _bundle_provenance(build_root) == {"cccl_source_commit": revision}
+
+
+def test_explicit_worktree_revision_must_match_head(tmp_path: Path) -> None:
+    _require_packaging_tools()
+    source_root = tmp_path / "cccl"
+    package_root = _prepare_minimal_cccl_source(source_root)
+    git_env = _isolated_git_env()
+    revision = _initialize_git_repository(source_root, git_env)
+    build = tmp_path / "build"
+    result = _configure_cuda_coop(
+        package_root,
+        build,
+        git_env,
+        "-DCUDA_COOP_CUTLASS_CCCL_SOURCE_REVISION=other",
+    )
+    assert result.returncode != 0
+    assert "must match the full Git HEAD commit" in result.stderr
+    result = _configure_cuda_coop(
+        package_root,
+        build,
+        git_env,
+        f"-DCUDA_COOP_CUTLASS_CCCL_SOURCE_REVISION={revision}",
+    )
+    result.check_returncode()
+    assert _bundle_provenance(build) == {"cccl_source_commit": revision}
 
 
 def test_gitless_archive_accepts_explicit_source_revision(

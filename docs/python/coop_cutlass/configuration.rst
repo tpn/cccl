@@ -88,12 +88,14 @@ Build-time CMake variables
 
 ``CUDA_COOP_CUTLASS_ALLOW_DIRTY_HEADER_BUNDLE``
    Defaults to ``OFF``. Allows a Git-worktree bundle when selected inputs are
-   changed or ``git status`` cannot verify them, and records its source
+   modified or Git cannot verify them (including inputs marked
+   ``assume-unchanged`` or ``skip-worktree``), and records its source
    revision as ``unknown``.
 
 ``CUDA_COOP_CUTLASS_CCCL_SOURCE_REVISION``
-   Defaults to empty. Supplies the revision token recorded instead of deriving
-   it from Git. A dirty or unverifiable Git worktree still records ``unknown``.
+   Defaults to empty. In a Git checkout, an explicit value must match the
+   full ``HEAD`` commit. For source archives, it supplies the revision token
+   to record. Allowing a dirty or unverifiable checkout records ``unknown``.
 
 Compilation and headers
 -----------------------
