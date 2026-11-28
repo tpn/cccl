@@ -16,6 +16,8 @@ address to CUB and probes the primitive's own scratch type.
 import hashlib
 from dataclasses import dataclass, replace
 
+import numpy as np
+
 from cuda.coop.cutlass._planning import (
     Algorithm,
     GroupLoweringPlan,
@@ -350,6 +352,28 @@ for _kind, _headers in (
     )
 
 
+def _histogram_samples(samples):
+    sample_type, values = _types.resolve_thread_data_value_type(
+        samples,
+        allowed=_SAMPLES,
+        feature="samples",
+        scope="cuda.coop.cutlass",
+        resolve_type=_resolve_type,
+    )
+    return sample_type, tuple(
+        _types.as_provider_scalar(value, sample_type, name="histogram sample")
+        for value in values
+    )
+
+
+def _counter_type(selector):
+    if selector is None:
+        return Int32
+    if not isinstance(selector, (type, np.dtype)):
+        raise TypeError("histogram counter_dtype must be a scalar type")
+    return _resolve_type(selector, allowed=_COUNTERS, feature="counter_dtype")
+
+
 def provider_histogram(
     *,
     group,
@@ -373,18 +397,8 @@ def provider_histogram(
     scratch uses. Emitted IR and the register tensor are not undone.
     """
 
-    sample_type, values = _types.resolve_thread_data_value_type(
-        samples,
-        allowed=_SAMPLES,
-        feature="samples",
-        scope="cuda.coop.cutlass",
-        resolve_type=_resolve_type,
-    )
-    counter_type = _resolve_type(
-        Int32 if counter_dtype is None else counter_dtype,
-        allowed=_COUNTERS,
-        feature="counter_dtype",
-    )
+    counter_type = _counter_type(counter_dtype)
+    sample_type, values = _histogram_samples(samples)
     request = _CubHistogramRequest(
         _make_histogram_plan(
             group=group,
@@ -448,7 +462,7 @@ def _emit_histogram_call(request, sample_type, values, temp_storage, counters):
     ffi(
         name=request.symbol_name, params_types=parameter_types, return_type=None
     )(
-        *(sample_type(value) for value in values),
+        *values,
         *storage_arguments,
         counters_address,
     )
@@ -459,13 +473,7 @@ def provider_histogram_composite(
 ):
     """Add samples directly into the caller's shared counter array."""
 
-    sample_type, values = _types.resolve_thread_data_value_type(
-        samples,
-        allowed=_SAMPLES,
-        feature="samples",
-        scope="cuda.coop.cutlass",
-        resolve_type=_resolve_type,
-    )
+    sample_type, values = _histogram_samples(samples)
     counter_type = _resolve_type(
         counters.element_type, allowed=_COUNTERS, feature="counters"
     )

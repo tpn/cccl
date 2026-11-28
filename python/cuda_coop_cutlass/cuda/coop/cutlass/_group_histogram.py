@@ -122,6 +122,7 @@ def histogram(
         :meth:`~cuda.coop.cutlass.ThreadData.from_fn` converts a payload to
         one of the five. For one sample per thread, pass a payload of one
         item. A register tensor or ``TensorSSA`` is read as a payload.
+        A host integer must fit the sample type before conversion.
 
         Each sample must be at least 0 and less than ``bins``. Nothing
         checks this when the kernel is compiled or while it runs. A sample

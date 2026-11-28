@@ -12,7 +12,7 @@ from cutlass import cute
 from .._compiler._launch import current_kernel_launch_facts
 from .._planning.group import resolve_thread_group
 from .._temp_storage import TempStorage
-from ._histogram import _COUNTERS, _resolve_type
+from ._histogram import _COUNTERS, _counter_type
 
 
 def counter_extent(counters):
@@ -72,11 +72,7 @@ def initialize_counters(group, counters, bins, counter_dtype):
     if counters is None:
         if bins > (1 << 31) - 1:
             raise ValueError("histogram_init bins must fit a positive int32")
-        dtype = _resolve_type(
-            cutlass.Int32 if counter_dtype is None else counter_dtype,
-            allowed=_COUNTERS,
-            feature="counter_dtype",
-        )
+        dtype = _counter_type(counter_dtype)
         counters = TempStorage(sharing="exclusive", auto_sync=False).reserve(
             bins, dtype
         )

@@ -14,6 +14,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import cutlass
+import numpy as np
 import pytest
 
 from cuda.coop.cutlass import (
@@ -23,7 +24,7 @@ from cuda.coop.cutlass import (
     histogram_init,
 )
 from cuda.coop.cutlass._compiler import _rendering, _state, _storage
-from cuda.coop.cutlass._lowering import _histogram
+from cuda.coop.cutlass._lowering import _histogram, _histogram_init
 from cuda.coop.cutlass._planning import (
     LaunchFacts,
     StorageOwnership,
@@ -285,3 +286,56 @@ def test_histogram_init_requires_one_source_of_counters():
 def test_shared_histogram_requires_block(primitive, args):
     with pytest.raises(NotImplementedError, match="requires a block group"):
         primitive(this_warp(), *args)
+
+
+@pytest.mark.parametrize("composite", (False, True))
+@pytest.mark.parametrize("algorithm", ("atomic", "sort"))
+def test_inferred_histogram_samples_must_fit_int32(composite, algorithm):
+    common = dict(
+        group=this_block(),
+        launch=LaunchFacts(exact_block_dim=(32, 1, 1)),
+        samples=ThreadData.from_values(1 << 40),
+        bins=5,
+        algorithm=algorithm,
+        temp_storage=TempStorage() if algorithm == "sort" else None,
+    )
+    with pytest.raises(ValueError, match="not representable in Int32"):
+        if composite:
+            _histogram.provider_histogram_composite(
+                **common, counters=SimpleNamespace(element_type=cutlass.Int32)
+            )
+        else:
+            _histogram.provider_histogram(
+                **common, bins_per_thread=1, counter_dtype=None
+            )
+
+
+@pytest.mark.parametrize("selector", (1, np.uint32(1), cutlass.Int32(1)))
+@pytest.mark.parametrize("allocate", (False, True))
+def test_scalar_counter_selector_rejected_before_allocation(
+    selector, allocate, monkeypatch
+):
+    launch = LaunchFacts(exact_block_dim=(32, 1, 1))
+    monkeypatch.setattr(
+        _histogram_init, "current_kernel_launch_facts", lambda: launch
+    )
+
+    def fail_allocation(*args, **kwargs):
+        pytest.fail("invalid counter selector reached allocation")
+
+    monkeypatch.setattr(TempStorage, "reserve", fail_allocation)
+    monkeypatch.setattr(_histogram, "_make_rmem_tensor", fail_allocation)
+    with pytest.raises(TypeError, match="counter_dtype must be a scalar type"):
+        if allocate:
+            histogram_init(this_block(), bins=2, counter_dtype=selector)
+        else:
+            _histogram.provider_histogram(
+                group=this_block(),
+                launch=launch,
+                samples=ThreadData.from_values(1),
+                bins=2,
+                bins_per_thread=1,
+                counter_dtype=selector,
+                algorithm="atomic",
+                temp_storage=None,
+            )
