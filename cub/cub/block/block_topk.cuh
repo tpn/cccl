@@ -14,23 +14,47 @@
 #endif // no system header
 
 #include <cub/block/specializations/block_topk_air.cuh>
+#include <cub/block/specializations/block_topk_warp_select.cuh>
 #include <cub/detail/null_type.cuh>
 #include <cub/device/dispatch/dispatch_common.cuh>
+
+#include <cuda/std/__type_traits/conditional.h>
+#include <cuda/std/__type_traits/is_same.h>
 
 CUB_NAMESPACE_BEGIN
 
 namespace detail
 {
+// The warp policies use AIR for unhandled input shapes and operations.
+enum class block_topk_algorithm
+{
+  air,
+  warp_select,
+  warp_select_with_zero_check
+};
+
 // TODO (elstehle): Add documentation
-template <typename KeyT, int BlockDimX, int ItemsPerThread, typename ValueT = NullType>
+template <typename KeyT,
+          int BlockDimX,
+          int ItemsPerThread,
+          typename ValueT                = NullType,
+          block_topk_algorithm Algorithm = block_topk_algorithm::air>
 class block_topk
 {
+  static constexpr bool use_warp_select =
+    Algorithm != block_topk_algorithm::air && BlockDimX == 64 && ItemsPerThread == 2
+    && ::cuda::std::is_same_v<KeyT, float> && ::cuda::std::is_same_v<ValueT, int>;
+
   using internal_block_topk_t = block_topk_air<KeyT, BlockDimX, ItemsPerThread, ValueT>;
 
 public:
   struct TempStorage
   {
-    typename internal_block_topk_t::TempStorage topk_storage;
+    union
+    {
+      typename internal_block_topk_t::TempStorage topk_storage;
+      ::cuda::std::conditional_t<use_warp_select, block_topk_warp_select::TempStorage, NullType> warp_storage;
+    };
   };
 
 private:
@@ -45,6 +69,15 @@ public:
   _CCCL_DEVICE_API _CCCL_FORCEINLINE void
   max_pairs(KeyT (&keys)[ItemsPerThread], ValueT (&values)[ItemsPerThread], int k, int num_valid)
   {
+    if constexpr (use_warp_select && !IsFullTile)
+    {
+      if (block_topk_warp_select::supports(k, num_valid))
+      {
+        constexpr bool check_zero = Algorithm == block_topk_algorithm::warp_select_with_zero_check;
+        block_topk_warp_select::select_pairs<check_zero>(storage.warp_storage, keys, values, k, num_valid);
+        return;
+      }
+    }
     internal_block_topk_t(storage.topk_storage)
       .template select_pairs<detail::topk::select::max, IsFullTile>(keys, values, k, num_valid);
   }

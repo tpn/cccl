@@ -10,10 +10,15 @@
 #include <thrust/count.h>
 #include <thrust/shuffle.h>
 
+#include <cuda/std/bit>
+#include <cuda/std/cstdint>
+#include <cuda/std/iterator>
 #include <cuda/std/span>
+#include <cuda/std/type_traits>
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 #include "catch2_test_block_topk_common.cuh"
 #include "cub_test_macros.h"
@@ -223,4 +228,173 @@ CUB_TEST("block_topk::{Min,Max}Keys preserve -0.0 in output", "[block][topk][flo
     return x == 0.0f && std::signbit(x);
   }));
   REQUIRE(num_minus_zero >= 1);
+}
+
+namespace
+{
+using topk_algorithm = cub::detail::block_topk_algorithm;
+using pair_policies =
+  c2h::enum_type_list<topk_algorithm,
+                      topk_algorithm::air,
+                      topk_algorithm::warp_select,
+                      topk_algorithm::warp_select_with_zero_check>;
+
+static_assert(cuda::std::is_same_v<cub::detail::block_topk<float, 64, 2, int>,
+                                   cub::detail::block_topk<float, 64, 2, int, topk_algorithm::air>>);
+
+struct topk_pair
+{
+  cuda::std::uint32_t bits;
+  int value;
+};
+
+template <topk_algorithm Algorithm>
+__global__ void topk_pairs_kernel(cuda::std::span<topk_pair> pairs, int k, int num_valid, bool select_max)
+{
+  using topk_t = cub::detail::block_topk<float, 64, 2, int, Algorithm>;
+  __shared__ typename topk_t::TempStorage smem;
+  const int base = static_cast<int>(threadIdx.x) * 2;
+  float keys[2]  = {cuda::std::bit_cast<float>(pairs[base].bits), cuda::std::bit_cast<float>(pairs[base + 1].bits)};
+  int values[2]  = {pairs[base].value, pairs[base + 1].value};
+
+  if (!select_max)
+  {
+    topk_t(smem).template min_pairs<false>(keys, values, k, num_valid);
+  }
+  else if (num_valid == 128)
+  {
+    topk_t(smem).template max_pairs<true>(keys, values, k, num_valid);
+  }
+  else
+  {
+    topk_t(smem).template max_pairs<false>(keys, values, k, num_valid);
+  }
+  for (int i = 0; i < 2; ++i)
+  {
+    pairs[base + i] = {cuda::std::bit_cast<cuda::std::uint32_t>(keys[i]), values[i]};
+  }
+}
+} // namespace
+
+CUB_TEST("block_topk policies select and preserve FP32 pairs", "[block][topk][warp_select]", CUB_SMALL, pair_policies)
+{
+  constexpr auto algorithm = c2h::get<0, TestType>::value;
+  int k                    = 31;
+  int num_valid            = 93;
+  bool select_max          = true;
+  c2h::host_vector<topk_pair> input(128);
+  for (int i = 0; i < 128; ++i)
+  {
+    input[i].value = 17 - 31 * i;
+  }
+
+  SECTION("nonnegative count below, at, or above k across two warps")
+  {
+    const int nonnegative = GENERATE(30, 31, 32);
+    for (int i = 0; i < num_valid; ++i)
+    {
+      input[i].bits = i < num_valid - nonnegative ? 0xbf800000u : 0x3f800000u + i;
+    }
+    // Both zero encodings count as nonnegative and retain their original bits.
+    input[num_valid - 2].bits = 0x80000000u;
+    input[num_valid - 1].bits = 0;
+  }
+  SECTION("more than 32 nonnegative items in the first warp")
+  {
+    k         = 32;
+    num_valid = 96;
+    for (int i = 0; i < num_valid; ++i)
+    {
+      input[i].bits = i < 64 ? 0x3f800000u + i : 0xbf800000u;
+    }
+  }
+  SECTION("minimum possible radix rank ties padding")
+  {
+    for (int i = 0; i < num_valid; ++i)
+    {
+      input[i].bits = 0xffffffffu;
+    }
+  }
+  SECTION("radix order and ties across policy boundaries")
+  {
+    const auto shape = GENERATE(table<int, int>(
+      {{0, 2}, {1, 2}, {8, 15}, {30, 92}, {31, 94}, {32, 96}, {33, 96}, {31, 97}, {31, 128}, {7, 7}, {8, 7}}));
+    k                = std::get<0>(shape);
+    num_valid        = std::get<1>(shape);
+    // NaN sign and payload, infinities, and both zero encodings participate in the raw radix order.
+    constexpr cuda::std::uint32_t pattern[]{
+      0xffffffffu,
+      0xffc00001u,
+      0xff800000u,
+      0x80000000u,
+      0u,
+      0x3f800000u,
+      0x7f800000u,
+      0x7f800001u,
+      0x7fc00123u,
+      0x80000000u,
+      0u,
+      0xbf800000u};
+    for (int i = 0; i < num_valid; ++i)
+    {
+      input[i].bits = pattern[i % cuda::std::size(pattern)];
+    }
+  }
+  SECTION("minimum selection uses the existing pair path")
+  {
+    select_max = false;
+    for (int i = 0; i < num_valid; ++i)
+    {
+      input[i].bits = 0xbf800000u + i;
+    }
+  }
+  for (int i = num_valid; i < 128; ++i)
+  {
+    input[i].bits = select_max ? 0x7fffffffu : 0xffffffffu;
+  }
+
+  c2h::device_vector<topk_pair> device(input);
+  topk_pairs_kernel<algorithm><<<1, 64>>>(to_span(device), k, num_valid, select_max);
+  REQUIRE(cudaSuccess == cudaPeekAtLastError());
+  REQUIRE(cudaSuccess == cudaDeviceSynchronize());
+
+  const c2h::host_vector<topk_pair> result(device);
+  // The no-op k == 0 call preserves the original pairs.
+  if (k == 0)
+  {
+    for (int i = 0; i < num_valid; ++i)
+    {
+      REQUIRE(result[i].bits == input[i].bits);
+      REQUIRE(result[i].value == input[i].value);
+    }
+    return;
+  }
+  const int count = std::min(k, num_valid);
+  auto rank       = [](cuda::std::uint32_t bits) {
+    return cub::Traits<float>::TwiddleIn(bits == 0x80000000u ? 0u : bits);
+  };
+  c2h::host_vector<cuda::std::uint32_t> expected(num_valid);
+  c2h::host_vector<cuda::std::uint32_t> actual(count);
+  std::transform(input.begin(), input.begin() + num_valid, expected.begin(), [&](topk_pair item) {
+    return rank(item.bits);
+  });
+  std::sort(expected.begin(), expected.end());
+  auto expected_begin = select_max ? expected.end() - count : expected.begin();
+
+  bool seen[128]{};
+  CAPTURE(k, num_valid, select_max);
+  for (int i = 0; i < count; ++i)
+  {
+    const auto pair = result[i];
+    const auto it   = std::find_if(input.begin(), input.begin() + num_valid, [&](topk_pair x) {
+      return x.value == pair.value;
+    });
+    REQUIRE(it != input.begin() + num_valid);
+    REQUIRE_FALSE(seen[it - input.begin()]);
+    seen[it - input.begin()] = true;
+    REQUIRE(pair.bits == (*it).bits);
+    actual[i] = rank(pair.bits);
+  }
+  std::sort(actual.begin(), actual.end());
+  REQUIRE(std::equal(actual.begin(), actual.end(), expected_begin));
 }
