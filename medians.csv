@@ -1,0 +1,49 @@
+device,distribution,algorithm,paired_rounds,median_us
+RTX PRO 6000 Blackwell Workstation Edition,Standard normal,Hand-written CuTe,303,4.04200004
+RTX PRO 6000 Blackwell Workstation Edition,Standard normal,AIR,303,4.55649989
+RTX PRO 6000 Blackwell Workstation Edition,Standard normal,Warp select,303,3.27500002
+RTX PRO 6000 Blackwell Workstation Edition,Standard normal,Warp select + zero check,303,3.37049994
+RTX PRO 6000 Blackwell Workstation Edition,Sign-separated (1 radix byte),Hand-written CuTe,303,4.01249994
+RTX PRO 6000 Blackwell Workstation Edition,Sign-separated (1 radix byte),AIR,303,3.24500003
+RTX PRO 6000 Blackwell Workstation Edition,Sign-separated (1 radix byte),Warp select,303,3.2734999
+RTX PRO 6000 Blackwell Workstation Edition,Sign-separated (1 radix byte),Warp select + zero check,303,2.63649994
+RTX PRO 6000 Blackwell Workstation Edition,Common prefix (4 radix bytes),Hand-written CuTe,303,3.98050016
+RTX PRO 6000 Blackwell Workstation Edition,Common prefix (4 radix bytes),AIR,303,6.47599995
+RTX PRO 6000 Blackwell Workstation Edition,Common prefix (4 radix bytes),Warp select,303,3.24400002
+RTX PRO 6000 Blackwell Workstation Edition,Common prefix (4 radix bytes),Warp select + zero check,303,3.34000005
+RTX PRO 6000 Blackwell Workstation Edition,All positive (1 radix byte),Hand-written CuTe,303,3.98200005
+RTX PRO 6000 Blackwell Workstation Edition,All positive (1 radix byte),AIR,303,3.24449991
+RTX PRO 6000 Blackwell Workstation Edition,All positive (1 radix byte),Warp select,303,3.24449991
+RTX PRO 6000 Blackwell Workstation Edition,All positive (1 radix byte),Warp select + zero check,303,3.34049994
+GB300,Standard normal,Hand-written CuTe,303,6.09849999
+GB300,Standard normal,AIR,303,5.99349989
+GB300,Standard normal,Warp select,303,3.95500008
+GB300,Standard normal,Warp select + zero check,303,4.13750019
+GB300,Sign-separated (1 radix byte),Hand-written CuTe,303,6.09700009
+GB300,Sign-separated (1 radix byte),AIR,303,4.43049986
+GB300,Sign-separated (1 radix byte),Warp select,303,3.95500008
+GB300,Sign-separated (1 radix byte),Warp select + zero check,303,3.16049997
+GB300,Common prefix (4 radix bytes),Hand-written CuTe,303,6.09599985
+GB300,Common prefix (4 radix bytes),AIR,303,8.53100047
+GB300,Common prefix (4 radix bytes),Warp select,303,3.95249994
+GB300,Common prefix (4 radix bytes),Warp select + zero check,303,4.13649995
+GB300,All positive (1 radix byte),Hand-written CuTe,303,6.09750021
+GB300,All positive (1 radix byte),AIR,303,4.4315001
+GB300,All positive (1 radix byte),Warp select,303,3.95249994
+GB300,All positive (1 radix byte),Warp select + zero check,303,4.13300004
+DGX Spark (GB10),Standard normal,Hand-written CuTe,303,15.997
+DGX Spark (GB10),Standard normal,AIR,303,18.1384999
+DGX Spark (GB10),Standard normal,Warp select,303,9.53899976
+DGX Spark (GB10),Standard normal,Warp select + zero check,303,10.0739999
+DGX Spark (GB10),Sign-separated (1 radix byte),Hand-written CuTe,303,15.9945004
+DGX Spark (GB10),Sign-separated (1 radix byte),AIR,303,12.3495003
+DGX Spark (GB10),Sign-separated (1 radix byte),Warp select,303,9.53599997
+DGX Spark (GB10),Sign-separated (1 radix byte),Warp select + zero check,303,5.27750002
+DGX Spark (GB10),Common prefix (4 radix bytes),Hand-written CuTe,303,15.9949996
+DGX Spark (GB10),Common prefix (4 radix bytes),AIR,303,28.7350006
+DGX Spark (GB10),Common prefix (4 radix bytes),Warp select,303,9.53199994
+DGX Spark (GB10),Common prefix (4 radix bytes),Warp select + zero check,303,10.0459997
+DGX Spark (GB10),All positive (1 radix byte),Hand-written CuTe,303,15.9945004
+DGX Spark (GB10),All positive (1 radix byte),AIR,303,12.3495003
+DGX Spark (GB10),All positive (1 radix byte),Warp select,303,9.53199994
+DGX Spark (GB10),All positive (1 radix byte),Warp select + zero check,303,10.0459997
