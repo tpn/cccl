@@ -351,6 +351,14 @@ def test_checked_host_casts(factory, value):
             ThreadData.from_values(value).to_tensor_ssa(dtype=dtype)
 
 
+@pytest.mark.parametrize("export", ["to_tensor_ssa", "to_register_tensor"])
+@pytest.mark.parametrize("value", [-1, np.int32(-1)])
+def test_declared_host_item_must_fit_explicit_export_dtype(export, value):
+    data = ThreadData.from_values(value, dtype=Int32)
+    with pytest.raises(ValueError, match="not representable in Uint8"):
+        getattr(data, export)(dtype=np.uint8)
+
+
 @pytest.mark.parametrize("selector", [123, 1.5, np.uint32(7), Int32(0)])
 def test_scalar_values_are_not_dtype_selectors(selector):
     with pytest.raises(TypeError, match="dtype must be a scalar type"):

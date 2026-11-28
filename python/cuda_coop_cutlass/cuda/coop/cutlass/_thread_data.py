@@ -509,6 +509,8 @@ def _check_host_cast(
     """Check representability before a host constructor narrows the value."""
     import numpy as np
 
+    if isinstance(value, np.generic):
+        value = value.item()
     if not isinstance(value, (int, float, complex, np.inexact)):
         return
     # NumPy real constructors discard the imaginary part of NumPy scalars.
@@ -1172,8 +1174,9 @@ class ThreadData:
         dtype : type, optional
             Element type of the result, a CUTLASS or NumPy numeric type.
             Left out, it is ``like.dtype`` when ``like`` is given and this
-            payload's ``dtype`` otherwise. Each item is converted to it. A
-            payload with no ``dtype`` needs ``dtype`` or ``like``.
+            payload's ``dtype`` otherwise. Host numbers must fit the output
+            type. CuTe scalar expressions use device casts. A payload
+            with no ``dtype`` needs ``dtype`` or ``like``.
         shape : int or tuple, optional
             Shape of the result. It is made of positive Python integers,
             may be nested, and holds exactly ``items_per_thread`` items.
@@ -1212,9 +1215,12 @@ class ThreadData:
         # Validate the original declaration before applying an explicit export
         # conversion. Vector.from_elements receives already typed values so
         # its signless IR casts cannot change unsigned numeric semantics.
-        if self.dtype is None:
-            values = self.values(source)
-        else:
+        values = self.values(source)
+        if self.dtype is not None:
+            # Check host literals before the declared dtype turns them into
+            # CuTe scalars. Device casts still use the declared source type.
+            for index, value in enumerate(values):
+                _check_host_cast(value, dtype, source=source, index=index)
             _, values = self._dynamic_values(feature=source)
         values = _coerce_payload_values_to_dtype(values, dtype, source=source)
 

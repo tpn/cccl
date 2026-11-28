@@ -19,6 +19,7 @@ pytestmark = [pytest.mark.backend_cutlass, pytest.mark.runtime, pytest.mark.gpu]
     "source_type,destination_type,source_value,numpy_type",
     [
         (cutlass.Uint8, cutlass.Int32, 200, np.int32),
+        (cutlass.Int32, cutlass.Uint8, -1, np.uint8),
         (cutlass.Uint16, cutlass.Uint32, 60000, np.uint32),
         (cutlass.Uint32, cutlass.Uint64, 0xFFFFFFFF, np.uint64),
         (cutlass.Uint32, cutlass.Float64, 3000000000, np.float64),
@@ -44,7 +45,8 @@ def test_export_signedness(
     output = np.zeros(2, dtype=numpy_type)
     with device_array(output) as destination:
         launch(destination, source_type(source_value))
-    np.testing.assert_array_equal(output, np.full(2, source_value, numpy_type))
+    expected = np.full(2, source_value).astype(numpy_type)
+    np.testing.assert_array_equal(output, expected)
 
 
 @pytest.mark.parametrize(
