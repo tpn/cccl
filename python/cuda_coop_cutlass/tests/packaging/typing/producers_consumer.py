@@ -6,10 +6,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 import numpy as np
-from cutlass import Int32
+from cutlass import Int32, Numeric
 from typing_extensions import assert_type
 
 import cuda.coop.cutlass as coop
@@ -79,7 +79,7 @@ class UserScalar:
     """Producer protocols preserve user-defined scalar types."""
 
 
-def check_producers(opaque_dtype: object) -> None:
+def check_producers() -> None:
     shaped = ShapedProducer(Int32(1))
     indexed = IndexableProducer(Int32(1))
     assert_type(coop.ThreadData.load(shaped), coop.ThreadData[Int32])
@@ -94,22 +94,15 @@ def check_producers(opaque_dtype: object) -> None:
     assert_type(coop.ThreadData.load(PayloadProducer()), coop.ThreadData[Int32])
     assert_type(
         coop.ThreadData.load(PayloadProducer(), dtype=np.dtype(np.uint8)),
-        coop.ThreadData[Int32] | coop.ThreadData[np.uint8],
+        coop.ThreadData[Int32] | coop.ThreadData[np.uint8 | Numeric],
     )
     assert_type(
         coop.ThreadData.load(shaped, dtype=np.float32),
-        coop.ThreadData[Int32] | coop.ThreadData[np.float32],
+        coop.ThreadData[Int32] | coop.ThreadData[np.float32 | Numeric],
     )
     assert_type(
         coop.ThreadData.load(indexed, items_per_thread=2, dtype=np.float64),
-        coop.ThreadData[Int32] | coop.ThreadData[np.float64],
-    )
-    assert_type(
-        coop.ThreadData.load(shaped, dtype=opaque_dtype), coop.ThreadData[Any]
-    )
-    assert_type(
-        coop.ThreadData.load(indexed, items_per_thread=2, dtype=opaque_dtype),
-        coop.ThreadData[Any],
+        coop.ThreadData[Int32] | coop.ThreadData[np.float64 | Numeric],
     )
     assert_type(
         coop.ThreadData.load(ShapedProducer(UserScalar())),
@@ -117,13 +110,13 @@ def check_producers(opaque_dtype: object) -> None:
     )
     assert_type(
         coop.ThreadData.load(shaped, dtype=UserScalar),
-        coop.ThreadData[Int32] | coop.ThreadData[UserScalar],
+        coop.ThreadData[Int32] | coop.ThreadData[UserScalar | Numeric],
     )
     source: coop.ThreadDataLoadSource[Int32] = shaped
     assert_type(coop.ThreadData.load(source), coop.ThreadData[Int32])
     assert_type(
         coop.ThreadData.load(source, dtype=np.dtype(np.int32)),
-        coop.ThreadData[Int32] | coop.ThreadData[np.int32],
+        coop.ThreadData[Int32] | coop.ThreadData[np.int32 | Numeric],
     )
     combined: coop.ThreadDataSource[Int32] = CombinedProducer(Int32(1))
     metadata: coop.ThreadDataTensorMetadata = Metadata()

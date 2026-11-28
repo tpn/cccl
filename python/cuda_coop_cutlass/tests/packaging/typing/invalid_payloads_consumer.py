@@ -5,7 +5,7 @@
 """Reject invalid hierarchy, payload, and storage calls through public stubs."""
 
 import numpy as np
-from cutlass import Float32
+from cutlass import Float32, Int32
 
 import cuda.coop.cutlass as coop
 
@@ -29,3 +29,14 @@ adapted[0].item()  # expected-error: [union-attr]
 coop.ThreadData.from_payload(  # expected-error: [call-overload]
     existing, dtype=np.uint8(1)
 )
+
+
+def reject_numpy_only_methods(value: Int32) -> None:
+    item = coop.ThreadData.from_fn(
+        1, lambda _: value, dtype=np.dtype(np.int32)
+    )[0]
+    item.tobytes()  # expected-error: [union-attr]
+
+
+existing.to_tensor_ssa(dtype=1)  # expected-error: [arg-type]
+existing.to_register_tensor(dtype=1)  # expected-error: [arg-type]

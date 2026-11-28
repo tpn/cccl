@@ -496,6 +496,21 @@ def _is_ordinary_scalar_dtype(dtype: Any) -> bool:
     return issubclass(dtype, np.generic)
 
 
+def _reject_scalar_dtype(dtype: Any) -> None:
+    """Keep producer metadata opaque while rejecting values used as types."""
+    if dtype is None or isinstance(dtype, type):
+        return
+
+    from numbers import Number
+
+    import numpy as np
+
+    from cutlass import Numeric
+
+    if isinstance(dtype, (Number, np.generic, Numeric)):
+        raise TypeError("ThreadData dtype must be a scalar type")
+
+
 def _coerce_payload_values_to_dtype(
     values: tuple[Any, ...],
     dtype: Any,
@@ -628,8 +643,12 @@ def _resolve_export_dtype(dtype: Any, *, fallback: Any, source: str) -> Any:
         raise TypeError(
             f"{source} requires dtype when ThreadData.dtype is not set"
         )
+    import numpy as np
+
     from ._compiler._types import ALL_PROVIDER_TYPES, canonical_dsl_type
 
+    if not isinstance(dtype, (type, np.dtype)):
+        raise TypeError(f"{source} dtype must be a supported numeric type")
     resolved = canonical_dsl_type(dtype)
     if resolved not in ALL_PROVIDER_TYPES:
         raise TypeError(f"{source} dtype must be a supported numeric type")
@@ -768,7 +787,9 @@ class ThreadData:
         Returns
         -------
         ThreadData
-            A new payload with every item assigned.
+            A new payload with every item assigned. A NumPy dtype produces
+            NumPy scalars for host numbers and the matching CUTLASS scalar
+            for CuTe expressions.
 
         Examples
         --------
@@ -1056,6 +1077,7 @@ class ThreadData:
 
         if items_per_thread is not None:
             items_per_thread = _validate_items_per_thread(items_per_thread)
+        _reject_scalar_dtype(dtype)
         source_type = type(source).__name__
         try:
             _inspect.getattr_static(source, _THREAD_DATA_LOAD_ATTR)

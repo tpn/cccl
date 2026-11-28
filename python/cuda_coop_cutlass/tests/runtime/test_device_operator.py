@@ -116,6 +116,12 @@ def _run(launch, source, *, options=()):
     return observed
 
 
+@pytest.mark.parametrize("selector", [1, np.int32(1), cutlass.Int32(1)])
+def test_compile_operator_rejects_scalar_dtype_values(selector):
+    with pytest.raises(TypeError, match="requires a supported scalar dtype"):
+        coop.compile_operator(_callback(), selector)
+
+
 def test_compile_operator_example():
     """Reduce and scan one block with a compiled ``a + b + 1`` operator."""
 

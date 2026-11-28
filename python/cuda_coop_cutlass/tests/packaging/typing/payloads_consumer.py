@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import numpy as np
-from cutlass import Int16, Int32, Uint8, Uint16, Uint32, Uint64
+from cutlass import Int16, Int32, Numeric, Uint8, Uint16, Uint32, Uint64
 from typing_extensions import assert_type
 
 import cuda.coop.cutlass as coop
@@ -39,30 +39,30 @@ def check_payloads() -> None:
     )
     assert_type(
         coop.ThreadData.from_fn(2, lambda i: i, dtype=np.dtype(np.int32)),
-        coop.ThreadData[np.int32],
+        coop.ThreadData[np.int32 | Numeric],
     )
     selector = np.dtype(np.uint8)
     existing = coop.ThreadData(1, dtype=selector, values=[1])
     assert_type(existing, coop.ThreadData[int])
     assert_type(
         coop.ThreadData.from_payload(existing, dtype=selector),
-        coop.ThreadData[int] | coop.ThreadData[np.uint8],
+        coop.ThreadData[int] | coop.ThreadData[np.uint8 | Numeric],
     )
     assert_type(
         coop.ThreadData.from_payload(
             ShapedPayload(1, dtype=selector, values=[1]), dtype=selector
         ),
-        coop.ThreadData[int] | coop.ThreadData[np.uint8],
+        coop.ThreadData[int] | coop.ThreadData[np.uint8 | Numeric],
     )
     fragment = values.to_register_tensor()
     vector = values.to_tensor_ssa()
     assert_type(
         coop.ThreadData.from_register_tensor(fragment, dtype=np.int32),
-        coop.ThreadData[np.int32],
+        coop.ThreadData[np.int32 | Numeric],
     )
     assert_type(
         coop.ThreadData.from_vector(vector, dtype=np.int32),
-        coop.ThreadData[np.int32],
+        coop.ThreadData[np.int32 | Numeric],
     )
 
 

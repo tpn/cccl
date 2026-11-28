@@ -238,8 +238,9 @@ def compile_operator(
     dtype : type
         The element type of both arguments and of the result, one of the
         ten listed under :ref:`ThreadData <coop-thread-data>`. Give a
-        CUTLASS type such as ``cutlass.Int32``, the matching NumPy type, or
-        Python ``int`` or ``float``, which mean ``Int32`` and ``Float32``.
+        CUTLASS type such as ``cutlass.Int32``, the matching NumPy type
+        or ``np.dtype`` instance, or Python ``int`` or ``float``, which mean
+        ``Int32`` and ``Float32``.
         Another type is rejected.
 
         The ``value`` passed to ``reduce`` or a scan must have exactly this
@@ -306,6 +307,8 @@ def compile_operator(
         :dedent: 4
     """
 
+    import numpy as np
+
     from ._compiler import _state, _target
     from ._compiler._types import TYPE_SPECIFICATIONS, canonical_dsl_type
 
@@ -315,6 +318,8 @@ def compile_operator(
         )
     if not callable(func):
         raise TypeError("compile_operator requires a @cute.jit callable")
+    if not isinstance(dtype, (type, np.dtype)):
+        raise TypeError("compile_operator requires a supported scalar dtype")
     value_type = canonical_dsl_type(dtype)
     if value_type not in TYPE_SPECIFICATIONS:
         raise TypeError("compile_operator requires a supported scalar dtype")

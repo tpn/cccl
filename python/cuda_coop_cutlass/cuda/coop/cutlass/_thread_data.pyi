@@ -15,10 +15,13 @@ from typing import Any, Generic, Protocol, TypeAlias, overload
 import numpy as np
 from typing_extensions import TypeVar
 
+from cutlass import Numeric
+
 from ._typing import ThreadDataLike
 
 _ItemT = TypeVar("_ItemT", default=Any)
 _ValueT = TypeVar("_ValueT")
+_DeviceT = TypeVar("_DeviceT", bound=Numeric)
 _NumpyT = TypeVar("_NumpyT", bound=np.generic)
 _SourceT_co = TypeVar("_SourceT_co", covariant=True)
 _ProducerT = TypeVar("_ProducerT")
@@ -157,6 +160,17 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         *rest: _ValueT,
         dtype: type[Any] | np.dtype[Any] | None = None,
     ) -> ThreadData[_ValueT]: ...
+    # A NumPy selector constructs NumPy scalars for host inputs. A device
+    # expression instead converts to the corresponding CUTLASS scalar.
+    @overload
+    @classmethod
+    def from_fn(
+        cls,
+        items_per_thread: int,
+        fn: Callable[[int], object],
+        *,
+        dtype: type[_DeviceT],
+    ) -> ThreadData[_DeviceT]: ...
     @overload
     @classmethod
     def from_fn(
@@ -165,7 +179,7 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         fn: Callable[[int], object],
         *,
         dtype: type[_ValueT],
-    ) -> ThreadData[_ValueT]: ...
+    ) -> ThreadData[_ValueT | Numeric]: ...
     @overload
     @classmethod
     def from_fn(
@@ -174,7 +188,7 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         fn: Callable[[int], object],
         *,
         dtype: np.dtype[_NumpyT],
-    ) -> ThreadData[_NumpyT]: ...
+    ) -> ThreadData[_NumpyT | Numeric]: ...
     @overload
     @classmethod
     def from_fn(
@@ -191,8 +205,17 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         fragment: CutlassTensorSample,
         *,
         items_per_thread: int | None = None,
+        dtype: type[_DeviceT],
+    ) -> ThreadData[_DeviceT]: ...
+    @overload
+    @classmethod
+    def from_register_tensor(
+        cls,
+        fragment: CutlassTensorSample,
+        *,
+        items_per_thread: int | None = None,
         dtype: type[_ValueT],
-    ) -> ThreadData[_ValueT]: ...
+    ) -> ThreadData[_ValueT | Numeric]: ...
     @overload
     @classmethod
     def from_register_tensor(
@@ -201,7 +224,7 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         *,
         items_per_thread: int | None = None,
         dtype: np.dtype[_NumpyT],
-    ) -> ThreadData[_NumpyT]: ...
+    ) -> ThreadData[_NumpyT | Numeric]: ...
     @overload
     @classmethod
     def from_register_tensor(
@@ -218,8 +241,17 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         vector: object,
         *,
         items_per_thread: int | None = None,
+        dtype: type[_DeviceT],
+    ) -> ThreadData[_DeviceT]: ...
+    @overload
+    @classmethod
+    def from_vector(
+        cls,
+        vector: object,
+        *,
+        items_per_thread: int | None = None,
         dtype: type[_ValueT],
-    ) -> ThreadData[_ValueT]: ...
+    ) -> ThreadData[_ValueT | Numeric]: ...
     @overload
     @classmethod
     def from_vector(
@@ -228,7 +260,7 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         *,
         items_per_thread: int | None = None,
         dtype: np.dtype[_NumpyT],
-    ) -> ThreadData[_NumpyT]: ...
+    ) -> ThreadData[_NumpyT | Numeric]: ...
     @overload
     @classmethod
     def from_vector(
@@ -256,8 +288,17 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         payload: _ThreadDataVectorSource[_ProducerT],
         *,
         items_per_thread: int | None = None,
+        dtype: type[_DeviceT],
+    ) -> ThreadData[_ProducerT] | ThreadData[_DeviceT]: ...
+    @overload
+    @classmethod
+    def from_payload(
+        cls,
+        payload: _ThreadDataVectorSource[_ProducerT],
+        *,
+        items_per_thread: int | None = None,
         dtype: type[_ValueT],
-    ) -> ThreadData[_ProducerT] | ThreadData[_ValueT]: ...
+    ) -> ThreadData[_ProducerT] | ThreadData[_ValueT | Numeric]: ...
     @overload
     @classmethod
     def from_payload(
@@ -266,7 +307,7 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         *,
         items_per_thread: int | None = None,
         dtype: np.dtype[_NumpyT],
-    ) -> ThreadData[_ProducerT] | ThreadData[_NumpyT]: ...
+    ) -> ThreadData[_ProducerT] | ThreadData[_NumpyT | Numeric]: ...
     @overload
     @classmethod
     def from_payload(
@@ -283,8 +324,19 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         source: ThreadDataLoadSource[_ProducerT],
         *,
         items_per_thread: int | None = None,
+        dtype: type[_DeviceT],
+    ) -> ThreadData[_ProducerT] | ThreadData[_DeviceT]:
+        """Preserve matching payloads or cast loaded register values."""
+
+    @overload
+    @classmethod
+    def load(
+        cls,
+        source: ThreadDataLoadSource[_ProducerT],
+        *,
+        items_per_thread: int | None = None,
         dtype: type[_ValueT],
-    ) -> ThreadData[_ProducerT] | ThreadData[_ValueT]:
+    ) -> ThreadData[_ProducerT] | ThreadData[_ValueT | Numeric]:
         """Preserve matching payloads or cast loaded register values."""
 
     @overload
@@ -295,7 +347,18 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         *,
         items_per_thread: int | None = None,
         dtype: np.dtype[_NumpyT],
-    ) -> ThreadData[_ProducerT] | ThreadData[_NumpyT]:
+    ) -> ThreadData[_ProducerT] | ThreadData[_NumpyT | Numeric]:
+        """Preserve matching payloads or cast loaded register values."""
+
+    @overload
+    @classmethod
+    def load(
+        cls,
+        source: _ThreadDataIndexableLoadSource[_ProducerT],
+        *,
+        items_per_thread: int,
+        dtype: type[_DeviceT],
+    ) -> ThreadData[_ProducerT] | ThreadData[_DeviceT]:
         """Preserve matching payloads or cast loaded register values."""
 
     @overload
@@ -306,7 +369,7 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         *,
         items_per_thread: int,
         dtype: type[_ValueT],
-    ) -> ThreadData[_ProducerT] | ThreadData[_ValueT]:
+    ) -> ThreadData[_ProducerT] | ThreadData[_ValueT | Numeric]:
         """Preserve matching payloads or cast loaded register values."""
 
     @overload
@@ -317,7 +380,7 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
         *,
         items_per_thread: int,
         dtype: np.dtype[_NumpyT],
-    ) -> ThreadData[_ProducerT] | ThreadData[_NumpyT]:
+    ) -> ThreadData[_ProducerT] | ThreadData[_NumpyT | Numeric]:
         """Preserve matching payloads or cast loaded register values."""
 
     @overload
@@ -342,38 +405,17 @@ class ThreadData(ThreadDataLike[_ItemT], Generic[_ItemT]):
     ) -> ThreadData[_ValueT]:
         """Load an indexable producer payload using an explicit item count."""
 
-    @overload
-    @classmethod
-    def load(
-        cls,
-        source: ThreadDataLoadSource[Any],
-        *,
-        items_per_thread: int | None = None,
-        dtype: object,
-    ) -> ThreadData[Any]:
-        """Load a statically sized producer using opaque dtype metadata."""
-
-    @overload
-    @classmethod
-    def load(
-        cls,
-        source: _ThreadDataIndexableLoadSource[Any],
-        *,
-        items_per_thread: int,
-        dtype: object,
-    ) -> ThreadData[Any]:
-        """Load an explicitly sized producer using opaque dtype metadata."""
     def to_tensor_ssa(
         self,
         *,
-        dtype: object | None = None,
+        dtype: type[Any] | np.dtype[Any] | None = None,
         shape: object | None = None,
         like: ThreadDataTensorMetadata | None = None,
     ) -> CutlassTensorSSASample: ...
     def to_register_tensor(
         self,
         *,
-        dtype: object | None = None,
+        dtype: type[Any] | np.dtype[Any] | None = None,
         shape: object | None = None,
     ) -> CutlassTensorSample: ...
     def __len__(self) -> int: ...

@@ -49,3 +49,7 @@ payload.to_tensor_ssa(like=DtypeOnly())  # expected-error: [arg-type]
 payload.to_tensor_ssa(like=object())  # expected-error: [arg-type]
 source: coop.ThreadDataSource[Int32]
 source = Producer()  # expected-error: [assignment]
+
+coop.ThreadData.load(  # expected-error: [call-overload]
+    Producer(), items_per_thread=1, dtype=1
+)

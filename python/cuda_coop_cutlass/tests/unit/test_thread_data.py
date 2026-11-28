@@ -178,6 +178,14 @@ def test_cute_register_conversions_use_payload_dtype_and_alignment():
         assert module.operation.verify()
 
 
+@pytest.mark.parametrize("export", ["to_tensor_ssa", "to_register_tensor"])
+def test_export_requires_a_dtype_token(export):
+    with pytest.raises(
+        TypeError, match="dtype must be a supported numeric type"
+    ):
+        getattr(ThreadData.from_values(1), export)(dtype=1)
+
+
 def test_export_rejects_incomplete_or_inconsistent_payload():
     with pytest.raises(ValueError, match="initialized"):
         ThreadData(items_per_thread=2, dtype=Int32).to_tensor_ssa()

@@ -62,6 +62,14 @@ def test_matching_dtype_preserves_existing_host_items():
     assert type(original[0]) is int
 
 
+@pytest.mark.parametrize("selector", [1, np.int32(7), cutlass.Int32(1)])
+def test_invalid_dtype_does_not_consume_producer(selector):
+    source = _Producer(_Vector())
+    with pytest.raises(TypeError, match="dtype must be a scalar type"):
+        coop.ThreadData.load(source, dtype=selector)
+    assert source.calls == 0
+
+
 @pytest.mark.parametrize("count", (True, 0, -1, 1.5))
 def test_invalid_extent_does_not_consume_producer(count):
     source = _Producer(_Vector())
