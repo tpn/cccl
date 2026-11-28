@@ -288,6 +288,28 @@ CUB_TEST("block_topk policies select and preserve FP32 pairs", "[block][topk][wa
     input[i].value = 17 - 31 * i;
   }
 
+  SECTION("distinct permuted scores across the three input columns")
+  {
+    const auto shape = GENERATE(table<int, int>({{30, 64}, {31, 65}, {32, 93}}));
+    k                = std::get<0>(shape);
+    num_valid        = std::get<1>(shape);
+    rng_t rng(static_cast<cuda::std::uint32_t>(C2H_SEED(1).get()));
+    auto keys    = distinct_keys<float>(num_valid, rng);
+    auto highest = *std::max_element(keys.begin(), keys.end());
+    // Positions 0 and 1 occupy the first warp's two columns. Position 64 starts the third column, when present.
+    for (int pos : {0, 1, 64})
+    {
+      if (pos < num_valid)
+      {
+        std::iter_swap(keys.begin() + pos, std::find(keys.begin(), keys.end(), highest));
+        --highest;
+      }
+    }
+    for (int i = 0; i < num_valid; ++i)
+    {
+      input[i].bits = cuda::std::bit_cast<cuda::std::uint32_t>(keys[i]);
+    }
+  }
   SECTION("nonnegative count below, at, or above k across two warps")
   {
     const int nonnegative = GENERATE(30, 31, 32);
@@ -369,7 +391,7 @@ CUB_TEST("block_topk policies select and preserve FP32 pairs", "[block][topk][wa
     }
     return;
   }
-  const int count = std::min(k, num_valid);
+  const int count = (cuda::std::min) (k, num_valid);
   auto rank       = [](cuda::std::uint32_t bits) {
     return cub::Traits<float>::TwiddleIn(bits == 0x80000000u ? 0u : bits);
   };

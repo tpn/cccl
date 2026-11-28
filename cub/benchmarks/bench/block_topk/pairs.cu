@@ -8,9 +8,9 @@
 
 #include <cuda/std/bit>
 #include <cuda/std/cstdint>
+#include <cuda/std/limits>
 
 #include <algorithm>
-#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -104,7 +104,7 @@ __global__ void select_pairs(const float* input, float* scores, int* indices, un
 
 std::vector<float> make_input(cuda::std::int64_t tiles, int k, int valid_items, const std::string& distribution)
 {
-  std::vector<float> input(tiles * tile_items, std::numeric_limits<float>::max());
+  std::vector<float> input(tiles * tile_items, (::cuda::std::numeric_limits<float>::max)());
   std::mt19937 rng{123};
   std::normal_distribution<float> normal;
   for (cuda::std::int64_t tile = 0; tile < tiles; ++tile)
@@ -174,7 +174,7 @@ void pairs(nvbench::state& state,
            nvbench::type_list<nvbench::enum_type<Algorithm>, nvbench::enum_type<K>, nvbench::enum_type<ValidItems>>)
 {
   const auto tiles = state.get_int64("Tiles{io}");
-  if (tiles < 1 || tiles > std::numeric_limits<int>::max())
+  if (tiles < 1 || tiles > (::cuda::std::numeric_limits<int>::max)())
   {
     state.skip("Tile count must fit the grid's x dimension.");
     return;
